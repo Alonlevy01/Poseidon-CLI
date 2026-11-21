@@ -39,6 +39,14 @@ class Settings(BaseSettings):
         default="poseidon-sandbox:dev",
         alias="POSEIDON_SANDBOX_IMAGE",
     )
+    embedding_model: str = Field(
+        default="BAAI/bge-small-en-v1.5",
+        alias="POSEIDON_EMBEDDING_MODEL",
+    )
+    embedding_cache_dir: str | None = Field(
+        default=None,
+        alias="FASTEMBED_CACHE_PATH",
+    )
     request_timeout_seconds: float = Field(
         default=120.0,
         alias="POSEIDON_REQUEST_TIMEOUT",

@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from poseidon.indexing.semantic_index import SemanticCodeIndex
 from poseidon.patching.unified_diff import (
     apply_unified_diff,
     extract_diff_payload,
@@ -58,6 +59,7 @@ def register_core_tools(
     confirm_patch: Callable[[str], bool] | None = None,
     test_runner: TestRunner | None = None,
     on_test_result: Callable[[TestRunResult], None] | None = None,
+    semantic_index: SemanticCodeIndex | None = None,
     protect_tests: bool = True,
 ) -> None:
     """Register all built-in workspace tools strictly sandboxed to the workspace."""
@@ -187,6 +189,8 @@ def register_core_tools(
         workspace.write_text(rel_path, normalized)
         state.read_hashes[rel_path] = sha256_text(normalized)
         state.dirty_since_last_test = True
+        if semantic_index is not None and semantic_index.cache_path.is_file():
+            semantic_index.sync()
         line_count = len(normalized.splitlines())
         return ToolExecutionResult(
             tool_name="create_file",
@@ -252,6 +256,8 @@ def register_core_tools(
         for rel_path in patch_res.modified_files:
             state.read_hashes[rel_path] = sha256_text(workspace.read_text(rel_path))
         state.dirty_since_last_test = True
+        if semantic_index is not None and semantic_index.cache_path.is_file():
+            semantic_index.sync()
 
         files_csv = ", ".join(patch_res.modified_files)
         return ToolExecutionResult(
@@ -482,5 +488,54 @@ def register_core_tools(
                     "additionalProperties": False,
                 },
                 handler=handle_run_tests,
+            )
+        )
+
+    if semantic_index is not None:
+
+        def handle_semantic_search(args: dict[str, Any]) -> ToolExecutionResult:
+            query = str(args["query"])
+            top_k = int(args.get("top_k", 5))
+            res = semantic_index.search(
+                query,
+                top_k=max(1, min(top_k, 10)),
+                auto_sync=True,
+            )
+            return ToolExecutionResult(
+                tool_name="semantic_search",
+                ok=True,
+                output=res.format_for_model(),
+                summary=(
+                    f"{len(res.hits)} match(es) for {res.query!r} "
+                    f"({res.lookup_ms:.1f}ms)"
+                ),
+            )
+
+        registry.register(
+            ToolDefinition(
+                name="semantic_search",
+                description=(
+                    "Find functions or code blocks by meaning using local code embeddings. "
+                    "Returns file paths and exact line ranges so you can inspect them with "
+                    "read_lines. Automatically refreshes the cached index when files change."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Plain-English description or symbol concept to find.",
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 10,
+                            "description": "Number of top matching code blocks (default 5).",
+                        },
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+                handler=handle_semantic_search,
             )
         )

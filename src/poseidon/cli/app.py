@@ -22,8 +22,10 @@ from poseidon.core.benchmark_m2 import (
     BenchmarkRow,
     run_whole_vs_diff_benchmark,
 )
+from poseidon.core.benchmark_m6 import SearchBenchmarkReport, run_search_benchmark
 from poseidon.core.diff_edit import DiffEditResult, run_diff_edit_request
 from poseidon.core.single_file import FileExtractionError, SingleFileResult, run_single_file_request
+from poseidon.indexing.semantic_index import FastEmbedProvider, SemanticCodeIndex
 from poseidon.llm.openrouter import (
     ModelToolSupportError,
     OpenRouterClient,
@@ -260,6 +262,13 @@ def _run_agent_with_ui(
         image=settings.sandbox_image,
         timeout_seconds=test_timeout,
     )
+    semantic_index = SemanticCodeIndex(
+        workspace,
+        FastEmbedProvider(
+            model_name=settings.embedding_model,
+            cache_dir=settings.embedding_cache_dir,
+        ),
+    )
 
     register_core_tools(
         registry=registry,
@@ -268,6 +277,7 @@ def _run_agent_with_ui(
         confirm_patch=lambda d: _preview_diff(d, auto_approve=auto_approve),
         test_runner=test_runner,
         on_test_result=_render_test_result,
+        semantic_index=semantic_index,
         protect_tests=True,
     )
 
@@ -327,6 +337,75 @@ def _render_benchmark_table(rows: list[BenchmarkRow]) -> None:
             _format_cost(row.cost_usd),
         )
     console.print(table)
+
+
+def _render_search_benchmark(report: SearchBenchmarkReport) -> None:
+    """Display per-question grep vs. semantic search results and overall hit/latency summary."""
+    console.print(
+        f"[bold]Embedding model:[/bold] [green]{report.model_name}[/green]  |  "
+        f"[bold]Indexed chunks:[/bold] {report.indexed_chunks}  |  "
+        f"[bold]Index sync:[/bold] {report.indexing_ms:.1f}ms\n"
+    )
+
+    for res in report.results:
+        grep_badge = "[bold green]HIT[/bold green]" if res.grep_hit else "[bold red]MISS[/bold red]"
+        sem_badge = (
+            "[bold green]HIT[/bold green]" if res.semantic_hit else "[bold red]MISS[/bold red]"
+        )
+        lines = [
+            f"[bold]Question ({res.kind}):[/bold] {res.question}",
+            f"[bold]Expected answer:[/bold] [yellow]{res.expected_target}[/yellow]",
+            "",
+            f"[bold cyan]Grep query:[/bold cyan] {res.grep_query!r}  →  "
+            f"{grep_badge} ({res.grep_ms:.2f}ms)",
+        ]
+        if res.grep_top3:
+            for idx, m in enumerate(res.grep_top3, start=1):
+                lines.append(f"  {idx}. {m.qualified_id} ({m.location}) — {m.detail}")
+        else:
+            lines.append("  (no matches)")
+
+        lines.append("")
+        lines.append(
+            f"[bold magenta]Semantic query:[/bold magenta] {res.semantic_query!r}  →  "
+            f"{sem_badge} ({res.semantic_ms:.2f}ms)"
+        )
+        if res.semantic_top3:
+            for idx, m in enumerate(res.semantic_top3, start=1):
+                lines.append(f"  {idx}. {m.qualified_id} ({m.location}, {m.detail})")
+        else:
+            lines.append("  (no matches)")
+
+        console.print(
+            Panel(
+                "\n".join(lines),
+                title=f"[bold]{res.id}[/bold]",
+                border_style="bright_blue",
+            )
+        )
+
+    summary = Table(
+        title="Milestone 6 Summary — Grep (ripgrep) vs. Local Code Embeddings",
+        border_style="cyan",
+    )
+    summary.add_column("Method", style="bold cyan")
+    summary.add_column("Hits (Top-3)", justify="right")
+    summary.add_column("Total Lookup Time (after indexing)", justify="right")
+    summary.add_column("Avg Lookup Time", justify="right")
+    n = max(1, report.total_questions)
+    summary.add_row(
+        "Grep (ripgrep)",
+        f"{report.grep_hits} / {report.total_questions}",
+        f"{report.grep_total_ms:.2f}ms",
+        f"{report.grep_total_ms / n:.2f}ms",
+    )
+    summary.add_row(
+        f"Embeddings ({report.model_name})",
+        f"{report.semantic_hits} / {report.total_questions}",
+        f"{report.semantic_total_ms:.2f}ms",
+        f"{report.semantic_total_ms / n:.2f}ms",
+    )
+    console.print(summary)
 
 
 @app.command()
@@ -600,6 +679,95 @@ def benchmark_diff(
                 )
             )
     _render_benchmark_table(rows)
+
+
+@app.command(name="search-semantic")
+def search_semantic(
+    query: Annotated[str, typer.Argument(help="Plain-English query or symbol concept to find.")],
+    workspace: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Workspace folder to index and search."),
+    ] = Path("."),
+    top_k: Annotated[
+        int,
+        typer.Option("--top-k", "-k", help="Number of top matching code blocks to display."),
+    ] = 3,
+    exclude_tests: Annotated[
+        bool,
+        typer.Option("--exclude-tests", help="Exclude test_*.py files from results."),
+    ] = False,
+) -> None:
+    """Index (or incrementally refresh) the workspace and search code by meaning."""
+    settings = Settings()
+    guard = WorkspaceGuard(workspace)
+    provider = FastEmbedProvider(
+        model_name=settings.embedding_model,
+        cache_dir=settings.embedding_cache_dir,
+    )
+    index = SemanticCodeIndex(guard, provider)
+
+    with console.status(f"[cyan]Syncing & searching index ({settings.embedding_model})...[/cyan]"):
+        result = index.search(query, top_k=top_k, auto_sync=True, exclude_tests=exclude_tests)
+
+    stats = result.sync_stats
+    sync_note = (
+        "cache hit (0 files re-embedded)"
+        if stats.cache_hit
+        else (
+            f"updated index (+{len(stats.added_files)} added, "
+            f"~{len(stats.updated_files)} edited, -{len(stats.deleted_files)} deleted)"
+        )
+    )
+    console.print(
+        f"[dim]Index: {stats.total_chunks} chunk(s) across {stats.total_files} file(s) | "
+        f"{sync_note} ({stats.elapsed_ms:.1f}ms) | Lookup: {result.lookup_ms:.2f}ms[/dim]"
+    )
+
+    table = Table(
+        title=f"Semantic Search Results for {query!r}",
+        border_style="cyan",
+    )
+    table.add_column("#", style="bold cyan", width=3)
+    table.add_column("Location", style="yellow")
+    table.add_column("Symbol", style="green")
+    table.add_column("Kind", style="white")
+    table.add_column("Score", justify="right")
+    for idx, hit in enumerate(result.hits, start=1):
+        table.add_row(
+            str(idx),
+            f"{hit.path}:{hit.start_line}-{hit.end_line}",
+            hit.symbol,
+            hit.kind,
+            f"{hit.score:.3f}",
+        )
+    console.print(table)
+
+
+@app.command(name="benchmark-search")
+def benchmark_search(
+    workspace: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Workspace folder containing the demo project."),
+    ] = Path("."),
+) -> None:
+    """Run the Milestone 6 4-question benchmark comparing grep vs. local code embeddings."""
+    settings = Settings()
+    guard = WorkspaceGuard(workspace)
+    render_banner(console, model=settings.embedding_model, workspace=guard.root)
+
+    provider = FastEmbedProvider(
+        model_name=settings.embedding_model,
+        cache_dir=settings.embedding_cache_dir,
+    )
+    index = SemanticCodeIndex(guard, provider)
+
+    with console.status(
+        f"[cyan]Indexing workspace & running 4-question search benchmark "
+        f"({settings.embedding_model})...[/cyan]"
+    ):
+        report = run_search_benchmark(workspace=guard, index=index)
+
+    _render_search_benchmark(report)
 
 
 @app.command()

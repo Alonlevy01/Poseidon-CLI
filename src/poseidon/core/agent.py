@@ -17,7 +17,8 @@ from poseidon.tools.registry import ToolExecutionResult, ToolRegistry, ToolSessi
 AGENT_SYSTEM_PROMPT = """You are Poseidon-CLI, a precise Python coding agent inside a sandbox.
 
 Workflow rules:
-1. Start by calling `search_text` (and `list_files` if needed) to locate relevant symbols and files.
+1. Start by calling `search_text` or `semantic_search` (and `list_files` if needed) to locate
+   relevant symbols and files.
 2. Read targeted sections with `read_lines` or full files with `read_file` before `apply_diff`.
 3. Respect modular boundaries: put computation, formatting, parsing, and CLI flags in their
    respective modules rather than dumping everything into one file.

@@ -3,7 +3,8 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    FASTEMBED_CACHE_PATH=/home/poseidon/.cache/fastembed
 
 WORKDIR /app
 
@@ -25,8 +26,9 @@ COPY src/ ./src/
 # Install package and dev tools into system environment
 RUN uv pip install --system --no-cache ".[dev]"
 
-# Prepare workspace mount point owned by non-root user
-RUN mkdir -p /workspace && chown -R poseidon:poseidon /app /workspace
+# Prepare workspace mount point and model cache dir owned by non-root user
+RUN mkdir -p /workspace /home/poseidon/.cache/fastembed \
+    && chown -R poseidon:poseidon /app /workspace /home/poseidon/.cache
 
 USER poseidon
 

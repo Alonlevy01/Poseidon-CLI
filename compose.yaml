@@ -13,6 +13,7 @@ services:
       - ./demo_workspace:/workspace
       - ./tests:/app/tests:ro
       - /var/run/docker.sock:/var/run/docker.sock
+      - poseidon_model_cache:/home/poseidon/.cache/fastembed
     stdin_open: true
     tty: true
     working_dir: /workspace
@@ -24,3 +25,6 @@ services:
     image: poseidon-sandbox:dev
     profiles:
       - build-only
+
+volumes:
+  poseidon_model_cache:
