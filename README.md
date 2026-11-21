@@ -1,6 +1,14 @@
-# Poseidon-CLI
+<p align="center">
+  <img src="docs/assets/poseidon-logo.svg" alt="Poseidon-CLI Logo" width="520" />
+</p>
 
-> **A containerized, multi-provider Python coding agent harness** with an interactive Terminal CLI (`poseidon`), an Abyssal-Ocean Web Workbench (`http://localhost:2701`), native tool calling, atomic unified diffs, AST + Ruff preflight validation, local ONNX semantic code search, isolated `--network none` Docker test verification, autonomous `/goal` execution, plugins, MCP, Local AI (Ollama / LM Studio), and multimodal vision/screenshot support.
+<p align="center">
+  <strong>A containerized, multi-provider Python coding agent harness</strong> with an interactive Terminal CLI (<code>poseidon</code>), an Abyssal-Ocean Web Workbench (<code>http://localhost:2701</code>), native tool calling, atomic unified diffs, AST + Ruff preflight validation, local ONNX semantic code search, isolated <code>--network none</code> Docker test verification, autonomous <code>/goal</code> execution, plugins, MCP, Local AI (Ollama / LM Studio), and multimodal screenshot/vision support.
+</p>
+
+<p align="center">
+  <img src="docs/assets/poseidon-webui.png" alt="Poseidon Web Workbench Screenshot" width="880" />
+</p>
 
 ---
 
@@ -47,19 +55,19 @@ flowchart LR
 
 ## Key Capabilities
 
-- **Instant Launch Everywhere:** Global `poseidon` and `poseidon ui -d` shims (`scripts/install.ps1`) mount your current directory cleanly into Docker — zero local Python pollution.
+- **Instant Launch Everywhere:** Global `poseidon` and `poseidon ui -d` shims (`scripts/install.ps1`) mount your current directory cleanly into Docker with zero local Python pollution.
 - **Terminal CLI & Abyssal-Ocean Web UI (100% Parity):**
   - Live WebSocket streaming on **`http://localhost:2701`** (multi-port `--port 2702`, detached `-d` with browser auto-open, reload-safe 8s auto-shutdown on tab close, or 1-click `⏻ Stop`).
   - Launch Web UI straight from inside an active terminal session via `/ui` (seamlessly resuming your current conversation).
-  - **`Ctrl+K`** fuzzy command/file palette, **`@file`** & **`@image.png`** mentions + fuzzy `@` picker, **Split / Unified Diff** approval cards, **Prompt History (`↑`/`↓`)**, **Clipboard Screenshot Paste (`Ctrl+V`)** for vision models, and **Centered 5-Tab Settings Modal**.
+  - **`Ctrl+K`** fuzzy command & file palette, **`@file`** & **`@image.png`** mentions with fuzzy `@` picker, **Split / Unified Diff** approval cards, **Prompt History (`↑`/`↓`)**, **Clipboard Screenshot Paste (`Ctrl+V`)** for vision models, and a **Centered 5-Tab Settings Modal**.
 - **6 AI Providers (Cloud + Local AI):**
   - **OpenRouter** (default free model `nvidia/nemotron-3.5-super-vl:free` + live catalog browser in Settings)
   - **Local AI (Zero API Key):** **Ollama** (`ollama:<model>`) and **LM Studio** (`lmstudio:<model>`) with live host auto-discovery (`host.docker.internal`)
-  - **Direct Cloud BYOK:** **Anthropic Claude** (`anthropic:<model>`), **Google Gemini** (`gemini:<model>`), **OpenAI GPT** (`openai:<model>`) — keys stored outside the project folder in a `0600` Docker volume (`poseidon_secrets`), never committed to Git or logged.
+  - **Direct Cloud BYOK:** **Anthropic Claude** (`anthropic:<model>`), **Google Gemini** (`gemini:<model>`), **OpenAI GPT** (`openai:<model>`) — keys stored outside your project folder in a `0600` Docker volume (`poseidon_secrets`), never committed to Git or logged.
 - **Autonomous `/goal` Engine:** Read-only planning pass → bounded execute-and-verify iterations → strict test-verification completion gate + anti-stuck breaker + live cancellation.
 - **Reliability & Context Engineering:**
   - Atomic unified diffs with SHA-256 stale-file checks, read-before-edit enforcement, and surrounding-line mismatch recovery.
-  - **Python AST + Ruff `F821–F823` Preflight Guard** blocking syntax errors before disk write and catching missing imports before slow container runs.
+  - **Python AST + Ruff `F821–F823` Preflight Guard** blocking syntax errors before disk write and surfacing undefined names / missing imports before running container tests.
   - **Deterministic Observation Masking** (`/compact` + automatic in loop) and **Pre-Edit Workspace Checkpoints** (`/undo`, `/checkpoints`).
   - **Persistent Global & Workspace Custom `/Commands`** (`~/.poseidon_secrets/commands/*.md` & `.poseidon/commands/*.md`).
 
@@ -106,29 +114,6 @@ poseidon -p "Summarize @analytics.py" --model ollama:qwen3:8b --plan --json
 
 ---
 
-## Empirical Benchmarks
-
-All benchmarks were executed live inside Docker against real workspaces and isolated `--network none` test sandboxes:
-
-### Local Semantic Search vs. Lexical Grep (Milestone 6 — `BAAI/bge-small-en-v1.5` ONNX)
-| Retrieval Engine | Questions Answered (Top-3) | Total Lookup Time (4 queries) | Avg Query Latency |
-| --- | :---: | :---: | :---: |
-| Ripgrep (`rg`) | 2 / 4 (50%) | 88.24 ms | 22.06 ms |
-| **FastEmbed Local Index** | **4 / 4 (100%)** | **9.20 ms** | **2.30 ms** |
-
-### Context Compaction — Deterministic Observation Masking (Milestone 7)
-- Masked stale bulky tool outputs while preserving recent turns verbatim: **50.6% context reduction** (`4,680 → 2,312 chars`, ~592 tokens saved) in a single turn with zero LLM summarization cost.
-
-### AST + Ruff Preflight Guard — Baseline (`v1`) vs. Preflight (`v2`) (Optional Challenge)
-Evaluated on `nvidia/nemotron-3.5-super-vl:free` (`--max-calls 10`) across both the original `--exclude` task and a **held-out** `--min-amount` task with hidden acceptance tests:
-
-| Variant | Task 1 (`--exclude`) Acceptance | Task 1 Elapsed | Task 2 (Held-out `--min-amount`) Visible / Acceptance | Task 2 Elapsed |
-| --- | :---: | :---: | :---: | :---: |
-| Baseline (`v1`) | FAIL (0/1) | 32.67s | 2/6 · FAIL (0/1) | 41.09s |
-| **+ AST & Ruff Preflight (`v2`)** | **PASS (1/1)** | **21.33s (-35%)** | **6/6 · PASS (1/1)** | **29.59s (-28%)** |
-
----
-
 ## Slash Commands (Shared Between Terminal & Web UI)
 
 | Command | Purpose |
@@ -164,7 +149,7 @@ Evaluated on `nvidia/nemotron-3.5-super-vl:free` (`--max-calls 10`) across both 
 # Lint with ruff inside Docker
 docker compose run --rm --entrypoint ruff poseidon check /app/src /app/tests
 
-# Run the full 72-test suite inside Docker
+# Run the full test suite inside Docker
 docker compose run --rm --entrypoint pytest poseidon /app/tests
 
 # Refresh deterministic uv.lock
