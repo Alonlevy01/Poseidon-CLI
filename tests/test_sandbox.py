@@ -31,6 +31,19 @@ def test_parse_junit_xml_extracts_counts_and_failure_details() -> None:
     assert "AssertionError" in failures[0].message
 
 
+def test_parse_junit_xml_surfaces_real_collection_error_detail() -> None:
+    xml = (
+        '<testsuite tests="1" errors="1" failures="0" skipped="0">'
+        '<testcase classname="tests.test_cli" name="test_cli">'
+        '<error message="collection failure">Traceback...\n'
+        "E   ModuleNotFoundError: No module named 'typer'</error>"
+        "</testcase></testsuite>"
+    )
+    _, _, errors, _, failures = parse_junit_xml(xml)
+    assert errors == 1
+    assert "ModuleNotFoundError" in failures[0].message
+
+
 def test_evaluate_test_outcome_verified_and_unverified_cases() -> None:
     ok_xml = (
         '<testsuite tests="2" failures="0" errors="0" skipped="0">'

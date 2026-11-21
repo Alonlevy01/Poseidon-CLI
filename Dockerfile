@@ -26,9 +26,9 @@ COPY src/ ./src/
 # Install package and dev tools into system environment
 RUN uv pip install --system --no-cache ".[dev]"
 
-# Prepare workspace mount point and model cache dir owned by non-root user
-RUN mkdir -p /workspace /home/poseidon/.cache/fastembed \
-    && chown -R poseidon:poseidon /app /workspace /home/poseidon/.cache
+# Prepare workspace mount point, sandbox dir, and model cache dir owned by non-root user
+RUN mkdir -p /workspace /sandbox /home/poseidon/.cache/fastembed \
+    && chown -R poseidon:poseidon /app /workspace /sandbox /home/poseidon/.cache
 
 USER poseidon
 

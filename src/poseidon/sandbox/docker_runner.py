@@ -150,7 +150,11 @@ def parse_junit_xml(xml_text: str) -> tuple[int, int, int, int, list[TestFailure
                 if node is not None:
                     msg = (node.attrib.get("message") or "").strip()
                     body = (node.text or "").strip()
-                    detail = msg or (body.splitlines()[-1] if body else f"Test {tag}")
+                    body_lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+                    if (not msg or msg.lower() == "collection failure") and body_lines:
+                        detail = body_lines[-1]
+                    else:
+                        detail = msg or (body_lines[-1] if body_lines else f"Test {tag}")
                     failures.append(TestFailure(name=full_name, message=detail))
 
     passed = max(0, total - failed - errors - skipped)
@@ -316,10 +320,11 @@ class DockerTestRunner:
             tar_bytes = build_workspace_tar(workspace_root, extra_files=extra_files)
             container = client.containers.create(
                 image=self._image,
+                entrypoint=[],
                 command=container_cmd,
                 working_dir="/sandbox",
-                user="sandbox",
-                environment={},
+                user="sandbox" if self._image == "poseidon-sandbox:dev" else None,
+                environment={"PYTHONPATH": "/sandbox:/sandbox/src"},
                 network_mode="none",
                 cap_drop=["ALL"],
                 security_opt=["no-new-privileges:true"],

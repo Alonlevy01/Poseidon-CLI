@@ -14,6 +14,7 @@ from poseidon.patching.unified_diff import (
     parse_unified_diff,
     sha256_text,
 )
+from poseidon.plugins.hooks import HookManager
 from poseidon.sandbox.docker_runner import TestRunner, TestRunResult
 from poseidon.search.lexical import search_workspace_text
 from poseidon.tools.registry import (
@@ -62,6 +63,7 @@ def register_core_tools(
     on_test_result: Callable[[TestRunResult], None] | None = None,
     semantic_index: SemanticCodeIndex | None = None,
     checkpoints: WorkspaceCheckpointManager | None = None,
+    hooks: HookManager | None = None,
     protect_tests: bool = True,
     read_only: bool = False,
 ) -> None:
@@ -179,6 +181,15 @@ def register_core_tools(
             )
 
         normalized = content if content.endswith("\n") else f"{content}\n"
+        if hooks is not None:
+            rejection = hooks.run_pre_edit(rel_path, normalized)
+            if rejection:
+                return ToolExecutionResult(
+                    tool_name="create_file",
+                    ok=False,
+                    output=f"Error: {rejection}",
+                    summary=f"blocked by pre_edit hook ({rel_path})",
+                )
         if confirm_patch is not None:
             preview = _format_new_file_as_diff(rel_path, normalized)
             if not confirm_patch(preview):
@@ -196,11 +207,15 @@ def register_core_tools(
         state.dirty_since_last_test = True
         if semantic_index is not None and semantic_index.cache_path.is_file():
             semantic_index.sync()
+        hook_notes = hooks.run_post_edit([rel_path]) if hooks is not None else []
         line_count = len(normalized.splitlines())
+        out_msg = f"Created new file '{rel_path}' ({line_count} lines)."
+        if hook_notes:
+            out_msg += "\n" + "\n".join(hook_notes)
         return ToolExecutionResult(
             tool_name="create_file",
             ok=True,
-            output=f"Created new file '{rel_path}' ({line_count} lines).",
+            output=out_msg,
             summary=f"created {rel_path} ({line_count} lines)",
             modified_files=[rel_path],
         )
@@ -243,6 +258,17 @@ def register_core_tools(
             dry_run=True,
         )
 
+        if hooks is not None:
+            for fp in file_patches:
+                rejection = hooks.run_pre_edit(fp.target_path, diff_text)
+                if rejection:
+                    return ToolExecutionResult(
+                        tool_name="apply_diff",
+                        ok=False,
+                        output=f"Error: {rejection}",
+                        summary=f"blocked by pre_edit hook ({fp.target_path})",
+                    )
+
         if confirm_patch is not None and not confirm_patch(diff_text):
             return ToolExecutionResult(
                 tool_name="apply_diff",
@@ -267,15 +293,19 @@ def register_core_tools(
         state.dirty_since_last_test = True
         if semantic_index is not None and semantic_index.cache_path.is_file():
             semantic_index.sync()
+        hook_notes = hooks.run_post_edit(patch_res.modified_files) if hooks is not None else []
 
         files_csv = ", ".join(patch_res.modified_files)
+        out_msg = (
+            f"Applied {patch_res.hunks_applied} hunk(s) to {files_csv} "
+            f"(+{patch_res.added_lines} / -{patch_res.removed_lines} lines)."
+        )
+        if hook_notes:
+            out_msg += "\n" + "\n".join(hook_notes)
         return ToolExecutionResult(
             tool_name="apply_diff",
             ok=True,
-            output=(
-                f"Applied {patch_res.hunks_applied} hunk(s) to {files_csv} "
-                f"(+{patch_res.added_lines} / -{patch_res.removed_lines} lines)."
-            ),
+            output=out_msg,
             summary=f"patched {files_csv} (+{patch_res.added_lines}/-{patch_res.removed_lines})",
             modified_files=patch_res.modified_files,
         )
@@ -472,15 +502,19 @@ def register_core_tools(
             state.dirty_since_last_test = False
             if on_test_result is not None:
                 on_test_result(res)
+            hook_notes = hooks.run_post_test(res) if hooks is not None else []
             summary = (
                 f"PASS ({res.passed}/{res.total} passed)"
                 if res.verified
                 else f"UNVERIFIED ({res.unverified_reason or 'tests failed'})"
             )
+            out_text = res.format_for_model()
+            if hook_notes:
+                out_text += "\n" + "\n".join(hook_notes)
             return ToolExecutionResult(
                 tool_name="run_tests",
                 ok=res.verified,
-                output=res.format_for_model(),
+                output=out_text,
                 summary=summary,
             )
 

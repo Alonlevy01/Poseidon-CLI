@@ -41,8 +41,11 @@ from poseidon.llm.openrouter import (
     OpenRouterError,
     TokenUsage,
 )
+from poseidon.mcp.client import MCPClientManager
 from poseidon.observability.respan import PoseidonTracer
 from poseidon.patching.unified_diff import PatchError, apply_unified_diff
+from poseidon.plugins.hooks import HookManager
+from poseidon.plugins.loader import load_workspace_plugins
 from poseidon.sandbox.docker_runner import DockerTestRunner, TestRunResult
 from poseidon.tools.builtin import register_core_tools
 from poseidon.tools.registry import ToolRegistry, ToolSessionState
@@ -300,6 +303,7 @@ def _run_agent_with_ui(
 ) -> AgentRunResult:
     """Execute the native tool-calling agent with live progress, diff preview, and Docker tests."""
     registry = ToolRegistry()
+    hooks = HookManager()
     state = tool_state if tool_state is not None else ToolSessionState()
     test_runner = DockerTestRunner(
         image=settings.sandbox_image,
@@ -322,9 +326,19 @@ def _run_agent_with_ui(
         on_test_result=_render_test_result,
         semantic_index=semantic_index,
         checkpoints=checkpoints,
+        hooks=hooks,
         protect_tests=True,
         read_only=plan_mode,
     )
+
+    plugin_report = load_workspace_plugins(workspace=workspace, registry=registry, hooks=hooks)
+    for warn in plugin_report.warnings:
+        console.print(f"[yellow]Plugin warning:[/yellow] {warn}")
+
+    mcp_manager = MCPClientManager()
+    mcp_report = mcp_manager.connect_and_register(workspace_root=workspace.root, registry=registry)
+    for warn in mcp_report.warnings:
+        console.print(f"[yellow]MCP warning:[/yellow] {warn}")
 
     memory = load_project_memory(workspace.root)
     sys_prompt = build_system_prompt(project_memory=memory.content, plan_mode=plan_mode)
@@ -343,22 +357,25 @@ def _run_agent_with_ui(
         )
 
     active_tracer = tracer if tracer is not None else PoseidonTracer(settings)
-    return run_agent_loop(
-        client=client,
-        registry=registry,
-        model=model,
-        user_prompt=prompt,
-        max_calls=max_calls,
-        tracer=active_tracer,
-        conversation_history=conversation_history,
-        on_model_call=_on_model_call,
-        on_tool_result=_on_tool_result,
-        workspace_root=workspace.root,
-        tool_state=state,
-        test_runner=test_runner,
-        on_test_result=_render_test_result,
-        system_prompt=sys_prompt,
-    )
+    try:
+        return run_agent_loop(
+            client=client,
+            registry=registry,
+            model=model,
+            user_prompt=prompt,
+            max_calls=max_calls,
+            tracer=active_tracer,
+            conversation_history=conversation_history,
+            on_model_call=_on_model_call,
+            on_tool_result=_on_tool_result,
+            workspace_root=workspace.root,
+            tool_state=state,
+            test_runner=test_runner,
+            on_test_result=_render_test_result,
+            system_prompt=sys_prompt,
+        )
+    finally:
+        mcp_manager.close()
 
 
 def _render_benchmark_table(rows: list[BenchmarkRow]) -> None:
@@ -552,6 +569,94 @@ def version() -> None:
     console.print(f"[bold cyan]{APP_NAME}[/bold cyan] v{__version__}")
 
 
+def _render_tools_inventory(
+    workspace: WorkspaceGuard,
+    settings: Settings,
+    *,
+    plan_mode: bool = False,
+) -> None:
+    """Inspect and print all active built-in, plugin, and MCP tools + lifecycle hooks."""
+    registry = ToolRegistry()
+    hooks = HookManager()
+    test_runner = DockerTestRunner(
+        image=settings.sandbox_image,
+        timeout_seconds=settings.default_test_timeout,
+    )
+    sem_index = SemanticCodeIndex(
+        workspace,
+        FastEmbedProvider(
+            model_name=settings.embedding_model,
+            cache_dir=settings.embedding_cache_dir,
+        ),
+    )
+    register_core_tools(
+        registry=registry,
+        workspace=workspace,
+        state=ToolSessionState(),
+        test_runner=test_runner,
+        semantic_index=sem_index,
+        hooks=hooks,
+        read_only=plan_mode,
+    )
+    builtin_names = set(registry.names())
+
+    plugin_report = load_workspace_plugins(workspace=workspace, registry=registry, hooks=hooks)
+    plugin_names = set(plugin_report.registered_tools)
+
+    with MCPClientManager() as mcp_manager:
+        mcp_report = mcp_manager.connect_and_register(
+            workspace_root=workspace.root,
+            registry=registry,
+        )
+        mcp_names = set(mcp_report.registered_tools)
+
+        table = Table(title=f"{APP_NAME} — Active Tools", border_style="cyan")
+        table.add_column("Tool Name", style="bold cyan")
+        table.add_column("Source", style="green")
+        table.add_column("Description", style="white")
+        for schema in registry.schemas():
+            fn = schema["function"]
+            name = fn["name"]
+            if name in builtin_names:
+                source = "built-in"
+            elif name in plugin_names:
+                source = "plugin"
+            elif name in mcp_names:
+                source = "mcp"
+            else:
+                source = "custom"
+            table.add_row(name, source, fn["description"])
+        console.print(table)
+
+        hook_summary = hooks.summary()
+        active_hooks = [f"{k}: {', '.join(v)}" for k, v in hook_summary.items() if v]
+        if active_hooks:
+            console.print(f"[cyan]Active hooks:[/cyan] {' | '.join(active_hooks)}")
+        if mcp_report.connected_servers:
+            console.print(
+                f"[green]Connected MCP servers:[/green] {', '.join(mcp_report.connected_servers)}"
+            )
+        for warn in (*plugin_report.warnings, *mcp_report.warnings):
+            console.print(f"[yellow]Warning:[/yellow] {warn}")
+
+
+@app.command()
+def tools(
+    workspace: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Workspace to inspect for plugins and mcp.json."),
+    ] = Path("."),
+    plan: Annotated[
+        bool,
+        typer.Option("--plan", help="Show the read-only Plan Mode toolset."),
+    ] = False,
+) -> None:
+    """List all active built-in, plugin, and MCP tools for a workspace."""
+    settings = Settings()
+    guard = WorkspaceGuard(workspace)
+    _render_tools_inventory(guard, settings, plan_mode=plan)
+
+
 @app.command()
 def models() -> None:
     """List recommended free tool-capable OpenRouter models."""
@@ -573,14 +678,19 @@ def test(
         int | None,
         typer.Option("--timeout", "-t", help="Test execution timeout in seconds."),
     ] = None,
+    sandbox_image: Annotated[
+        str | None,
+        typer.Option("--sandbox-image", help="Docker image used for the isolated test sandbox."),
+    ] = None,
 ) -> None:
     """Run workspace unit tests inside a disposable --network none Docker sandbox."""
     settings = Settings()
     effective_timeout = timeout if timeout is not None else settings.default_test_timeout
+    effective_image = sandbox_image or settings.sandbox_image
     guard = WorkspaceGuard(workspace)
 
     runner = DockerTestRunner(
-        image=settings.sandbox_image,
+        image=effective_image,
         timeout_seconds=effective_timeout,
     )
     with console.status(
@@ -1187,6 +1297,9 @@ def _start_interactive_session(
                 console.print(
                     f"[yellow]Workspace files:[/yellow] {', '.join(files) if files else '(empty)'}"
                 )
+                continue
+            if user_input == "/tools":
+                _render_tools_inventory(guard, settings, plan_mode=plan_mode)
                 continue
             if user_input == "/plan":
                 plan_mode = not plan_mode
