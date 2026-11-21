@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
     "python-dotenv>=1.0.0",
+    "respan-tracing>=2.25.0",
     "rich>=13.9.0",
     "typer>=0.15.0",
 ]

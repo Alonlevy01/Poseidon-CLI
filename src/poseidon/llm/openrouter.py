@@ -1,4 +1,4 @@
-"""Direct OpenRouter HTTP client."""
+"""Direct OpenRouter HTTP client with native tool calling and usage metrics."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from poseidon.config import Settings
 
@@ -19,11 +19,24 @@ class MissingApiKeyError(OpenRouterError):
     """Raised when OPENROUTER_API_KEY is not configured."""
 
 
+class ModelToolSupportError(OpenRouterError):
+    """Raised when the selected model does not support tool calling or is unavailable."""
+
+
+class ToolCall(BaseModel):
+    """A single native tool call requested by the model."""
+
+    id: str
+    name: str
+    arguments: str
+
+
 class TokenUsage(BaseModel):
     """Token and cost metadata returned by OpenRouter."""
 
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    reasoning_tokens: int | None = None
     total_tokens: int | None = None
     cost_usd: float | None = None
 
@@ -33,9 +46,30 @@ class ChatResponse(BaseModel):
 
     model: str
     content: str
+    tool_calls: list[ToolCall] = Field(default_factory=list)
     usage: TokenUsage
     elapsed_seconds: float
     finish_reason: str | None = None
+
+    def to_assistant_message(self) -> dict[str, Any]:
+        """Build the OpenRouter/OpenAI-compliant assistant message for conversation history."""
+        msg: dict[str, Any] = {
+            "role": "assistant",
+            "content": self.content if self.content else None,
+        }
+        if self.tool_calls:
+            msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": tc.arguments,
+                    },
+                }
+                for tc in self.tool_calls
+            ]
+        return msg
 
 
 class OpenRouterClient:
@@ -66,6 +100,8 @@ class OpenRouterClient:
         model: str,
         messages: list[dict[str, Any]],
         temperature: float = 0.2,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
     ) -> ChatResponse:
         """Send a chat completion request directly to OpenRouter."""
         api_key = self._settings.openrouter_api_key.get_secret_value().strip()
@@ -85,6 +121,9 @@ class OpenRouterClient:
             "messages": messages,
             "temperature": temperature,
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice or "auto"
 
         started = time.perf_counter()
         try:
@@ -95,6 +134,16 @@ class OpenRouterClient:
 
         if response.status_code >= 400:
             detail = _extract_error_detail(response)
+            lower_detail = detail.lower()
+            if tools and (
+                "tool" in lower_detail
+                or "function" in lower_detail
+                or response.status_code == 404
+            ):
+                raise ModelToolSupportError(
+                    f"Model '{model}' is unavailable or does not support tool calling "
+                    f"(HTTP {response.status_code}): {detail}"
+                )
             raise OpenRouterError(
                 f"OpenRouter request failed (HTTP {response.status_code}): {detail}"
             )
@@ -107,11 +156,13 @@ class OpenRouterClient:
         message = choices[0].get("message") or {}
         content = message.get("content") or ""
         finish_reason = choices[0].get("finish_reason")
+        parsed_tool_calls = _parse_tool_calls(message.get("tool_calls"))
         raw_usage = data.get("usage") or {}
 
         usage = TokenUsage(
             prompt_tokens=raw_usage.get("prompt_tokens"),
             completion_tokens=raw_usage.get("completion_tokens"),
+            reasoning_tokens=_extract_reasoning_tokens(raw_usage),
             total_tokens=raw_usage.get("total_tokens"),
             cost_usd=raw_usage.get("cost"),
         )
@@ -119,10 +170,41 @@ class OpenRouterClient:
         return ChatResponse(
             model=data.get("model") or model,
             content=content,
+            tool_calls=parsed_tool_calls,
             usage=usage,
             elapsed_seconds=elapsed,
             finish_reason=finish_reason,
         )
+
+
+def _parse_tool_calls(raw_calls: Any) -> list[ToolCall]:
+    """Normalize OpenRouter tool_calls entries into typed ToolCall models."""
+    if not isinstance(raw_calls, list):
+        return []
+    parsed: list[ToolCall] = []
+    for idx, item in enumerate(raw_calls):
+        if not isinstance(item, dict):
+            continue
+        fn = item.get("function") or {}
+        name = str(fn.get("name") or "").strip()
+        if not name:
+            continue
+        call_id = str(item.get("id") or f"call_{idx}")
+        arguments = fn.get("arguments")
+        if not isinstance(arguments, str):
+            arguments = "{}" if arguments is None else str(arguments)
+        parsed.append(ToolCall(id=call_id, name=name, arguments=arguments))
+    return parsed
+
+
+def _extract_reasoning_tokens(raw_usage: dict[str, Any]) -> int | None:
+    """Extract hidden reasoning tokens when reported by OpenRouter."""
+    details = raw_usage.get("completion_tokens_details")
+    if isinstance(details, dict) and details.get("reasoning_tokens") is not None:
+        return int(details["reasoning_tokens"])
+    if raw_usage.get("reasoning_tokens") is not None:
+        return int(raw_usage["reasoning_tokens"])
+    return None
 
 
 def _extract_error_detail(response: httpx.Response) -> str:

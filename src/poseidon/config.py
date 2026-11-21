@@ -18,9 +18,18 @@ class Settings(BaseSettings):
         default="https://openrouter.ai/api/v1",
         alias="OPENROUTER_BASE_URL",
     )
+    respan_api_key: SecretStr = Field(default=SecretStr(""), alias="RESPAN_API_KEY")
+    respan_base_url: str | None = Field(
+        default=None,
+        alias="RESPAN_BASE_URL",
+    )
     default_model: str = Field(
         default="nvidia/nemotron-3.5-super-vl:free",
         alias="POSEIDON_DEFAULT_MODEL",
+    )
+    default_max_calls: int = Field(
+        default=8,
+        alias="POSEIDON_MAX_CALLS",
     )
     request_timeout_seconds: float = Field(
         default=120.0,

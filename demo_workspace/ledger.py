@@ -71,6 +71,12 @@ def main() -> None:
         default="$",
         help="Currency symbol to prefix monetary amounts with.",
     )
+    parser.add_argument(
+        "--sort",
+        choices=["name", "amount"],
+        default="name",
+        help="Sort categories by name (alphabetical) or amount (highest total first).",
+    )
 
     args = parser.parse_args()
 
@@ -84,7 +90,11 @@ def main() -> None:
         return
 
     grand_total = 0.0
-    for category in sorted(totals):
+    if args.sort == "amount":
+        ordered = sorted(totals, key=lambda c: totals[c], reverse=True)
+    else:
+        ordered = sorted(totals)
+    for category in ordered:
         category_total = totals[category]
         grand_total += category_total
         print(f"{category}: {args.currency}{category_total:.2f}")
