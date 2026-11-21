@@ -702,27 +702,31 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
-      flex-wrap: wrap;
+      gap: 8px;
+      flex-wrap: nowrap;
     }
     .controls-left {
       display: flex;
       align-items: center;
       gap: 8px;
       min-width: 0;
+      flex: 1;
     }
     .controls-left select {
-      max-width: 310px;
+      max-width: 255px;
+      width: 100%;
       font-family: var(--font-mono);
-      font-size: 11.8px;
-      padding: 5px 10px;
+      font-size: 11.6px;
+      padding: 5px 9px;
       color: var(--cyan-soft);
+      text-overflow: ellipsis;
     }
     .controls-right {
       display: flex;
       align-items: center;
       gap: 6px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
+      flex-shrink: 0;
     }
     .controls-right select {
       font-size: 11.8px;
@@ -747,9 +751,9 @@
       right: 0;
       bottom: 0;
       width: min(600px, 92vw);
-      background: rgba(5, 16, 27, 0.98);
+      background: #05101b;
       border-left: 1px solid var(--border-strong);
-      box-shadow: -14px 0 38px rgba(0, 0, 0, 0.55);
+      box-shadow: -14px 0 38px rgba(0, 0, 0, 0.72);
       transform: translateX(100%);
       transition: transform 0.2s ease;
       display: flex;
@@ -884,10 +888,10 @@
       gap: 8px;
     }
 
-    /* ── Centered Settings Modal Window ────────────────────────────────────── */
+    /* ── Centered Settings Modal Window (Fixed Height — Zero Tab Jumping!) ─── */
     .settings-modal-box {
       width: min(780px, 94vw);
-      max-height: 85vh;
+      height: min(650px, 84vh);
       background: rgba(6, 18, 31, 0.98);
       border: 1px solid var(--border-strong);
       border-radius: 16px;
@@ -904,11 +908,87 @@
       justify-content: space-between;
       gap: 12px;
       background: rgba(4, 13, 22, 0.92);
+      flex-shrink: 0;
+    }
+    #settingsModalTabs {
+      flex-shrink: 0;
     }
     .settings-modal-body {
       flex: 1;
+      min-height: 0;
       overflow-y: auto;
       padding: 16px 18px;
+    }
+
+    /* ── Side-by-Side Diff View (delta-inspired) ───────────────────────────── */
+    .diff-split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      font-family: var(--font-mono);
+      font-size: 11.8px;
+      line-height: 1.48;
+      max-height: 360px;
+      overflow: auto;
+      background: rgba(3, 10, 18, 0.96);
+    }
+    .diff-split-col {
+      min-width: 0;
+      border-right: 1px solid rgba(56, 232, 255, 0.14);
+    }
+    .diff-split-col:last-child { border-right: none; }
+    .diff-split-cell {
+      padding: 1px 10px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 1.48em;
+    }
+    .diff-split-cell.del { background: rgba(244, 63, 94, 0.16); color: #fecdd3; }
+    .diff-split-cell.add { background: rgba(16, 185, 129, 0.16); color: #a7f3d0; }
+    .diff-split-cell.hunk { background: rgba(56, 232, 255, 0.10); color: var(--cyan); }
+    .diff-split-cell.empty { background: rgba(4, 13, 22, 0.65); color: transparent; }
+
+    /* ── Ctrl+K Global Command & File Palette (fzf-inspired) ───────────────── */
+    .cmdk-box {
+      width: min(620px, 92vw);
+      max-height: 70vh;
+      background: rgba(6, 18, 31, 0.99);
+      border: 1px solid var(--border-strong);
+      border-radius: 14px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.75), 0 0 32px rgba(56, 232, 255, 0.18);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .cmdk-input {
+      width: 100%;
+      padding: 14px 16px;
+      border: none;
+      border-bottom: 1px solid var(--border-cyan);
+      background: rgba(4, 13, 22, 0.95);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      outline: none;
+    }
+    .cmdk-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px;
+    }
+    .cmdk-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 11px;
+      border-radius: 8px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      font-size: 12.5px;
+    }
+    .cmdk-item:hover, .cmdk-item.selected {
+      background: rgba(56, 232, 255, 0.14);
+      border-color: rgba(56, 232, 255, 0.36);
     }
 
     .spinner {
@@ -1106,7 +1186,7 @@
 
         <div class="composer-hint">
           <span id="workspaceLabel" class="mono truncate">workspace: /workspace</span>
-          <span><span class="mono">/</span> commands &middot; Enter send &middot; Shift+Enter newline</span>
+          <span><span class="mono">Ctrl+K</span> palette &middot; <span class="mono">/</span> cmds &middot; <span class="mono">@</span> files &middot; <span class="mono">↑↓</span> history</span>
         </div>
       </div>
     </main>
@@ -1161,6 +1241,14 @@
     </div>
   </div>
 
+  <!-- 6. CTRL+K GLOBAL COMMAND & FILE PALETTE -->
+  <div id="cmdkModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Quick Palette">
+    <div class="cmdk-box">
+      <input id="cmdkInput" class="cmdk-input" type="text" placeholder="Jump to any file, /command, saved session, or settings tab... (Esc to close)" />
+      <div id="cmdkList" class="cmdk-list"></div>
+    </div>
+  </div>
+
   <script>
     const els = {
       statusPill: document.getElementById("statusPill"),
@@ -1211,6 +1299,9 @@
       settingsModalTabs: document.getElementById("settingsModalTabs"),
       settingsModalBody: document.getElementById("settingsModalBody"),
       closeSettingsModalBtn: document.getElementById("closeSettingsModalBtn"),
+      cmdkModal: document.getElementById("cmdkModal"),
+      cmdkInput: document.getElementById("cmdkInput"),
+      cmdkList: document.getElementById("cmdkList"),
     };
 
     let ws = null;
@@ -1302,21 +1393,81 @@
         .join("");
     }
 
+    function renderSplitDiffHtml(diffText) {
+      const left = [];
+      const right = [];
+      const lines = String(diffText || "").split("\n");
+      let i = 0;
+      while (i < lines.length) {
+        const line = lines[i];
+        if (line.startsWith("@@") || line.startsWith("---") || line.startsWith("+++")) {
+          left.push(`<div class="diff-split-cell hunk">${esc(line)}</div>`);
+          right.push(`<div class="diff-split-cell hunk">${esc(line)}</div>`);
+          i++;
+        } else if (line.startsWith("-")) {
+          const dels = [];
+          const adds = [];
+          while (i < lines.length && lines[i].startsWith("-") && !lines[i].startsWith("---")) {
+            dels.push(lines[i++]);
+          }
+          while (i < lines.length && lines[i].startsWith("+") && !lines[i].startsWith("+++")) {
+            adds.push(lines[i++]);
+          }
+          const n = Math.max(dels.length, adds.length);
+          for (let k = 0; k < n; k++) {
+            left.push(
+              dels[k] !== undefined
+                ? `<div class="diff-split-cell del">${esc(dels[k])}</div>`
+                : `<div class="diff-split-cell empty">&nbsp;</div>`
+            );
+            right.push(
+              adds[k] !== undefined
+                ? `<div class="diff-split-cell add">${esc(adds[k])}</div>`
+                : `<div class="diff-split-cell empty">&nbsp;</div>`
+            );
+          }
+        } else if (line.startsWith("+")) {
+          left.push(`<div class="diff-split-cell empty">&nbsp;</div>`);
+          right.push(`<div class="diff-split-cell add">${esc(line)}</div>`);
+          i++;
+        } else {
+          left.push(`<div class="diff-split-cell">${esc(line)}</div>`);
+          right.push(`<div class="diff-split-cell">${esc(line)}</div>`);
+          i++;
+        }
+      }
+      return `<div class="diff-split"><div class="diff-split-col">${left.join("")}</div><div class="diff-split-col">${right.join("")}</div></div>`;
+    }
+
     function appendDiffApproval(approvalId, diffText) {
       hideWelcome();
       const card = document.createElement("div");
       card.className = "card diff-card";
+      let splitMode = false;
       card.innerHTML = `
         <div class="diff-header">
-          <span class="mono" style="color:var(--cyan);font-size:12px;font-weight:600;">Unified Diff Approval Required</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="mono" style="color:var(--cyan);font-size:12px;font-weight:600;">Unified Diff Approval Required</span>
+            <button class="btn btn-sm" data-toggle-diff="1" title="Toggle Unified / Side-by-Side view">Split View</button>
+          </div>
           <div class="diff-actions">
-            <button class="btn btn-approve btn-sm">Approve &amp; Apply</button>
-            <button class="btn btn-reject btn-sm">Reject</button>
+            <button class="btn btn-approve btn-sm" data-act="approve">Approve &amp; Apply</button>
+            <button class="btn btn-reject btn-sm" data-act="reject">Reject</button>
           </div>
         </div>
-        <div class="diff-pre">${renderDiffHtml(diffText)}</div>
+        <div class="diff-body"><div class="diff-pre">${renderDiffHtml(diffText)}</div></div>
       `;
-      const [approveBtn, rejectBtn] = card.querySelectorAll("button");
+      const toggleBtn = card.querySelector("[data-toggle-diff]");
+      const diffBody = card.querySelector(".diff-body");
+      toggleBtn.onclick = () => {
+        splitMode = !splitMode;
+        toggleBtn.textContent = splitMode ? "Unified View" : "Split View";
+        diffBody.innerHTML = splitMode
+          ? renderSplitDiffHtml(diffText)
+          : `<div class="diff-pre">${renderDiffHtml(diffText)}</div>`;
+      };
+      const approveBtn = card.querySelector('[data-act="approve"]');
+      const rejectBtn = card.querySelector('[data-act="reject"]');
       const decide = (approved) => {
         approveBtn.disabled = true;
         rejectBtn.disabled = true;
@@ -1543,6 +1694,7 @@
         .map((line, i) => `<div class="code-line"><span class="code-ln">${i + 1}</span><span>${esc(line)}</span></div>`)
         .join("");
       els.drawer.classList.add("open");
+      els.drawer.setAttribute("aria-hidden", "false");
     }
 
     async function openToolsDrawer() {
@@ -1550,6 +1702,7 @@
       els.copyDrawerBtn.style.display = "none";
       els.drawerBody.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:var(--text-muted);"><span class="spinner"></span> Inspecting Built-in, Plugin, and MCP tools...</div>`;
       els.drawer.classList.add("open");
+      els.drawer.setAttribute("aria-hidden", "false");
       const resp = await fetch("/api/tools");
       const data = await resp.json();
       els.drawerTitle.textContent = `Active Tools (${(data.tools || []).length})${data.plan_mode ? " — Plan Mode" : ""}`;
@@ -1912,7 +2065,7 @@
             <label class="check-row"><input id="orFreeOnly" type="checkbox" checked /><span>Free (:free) only</span></label>
             <label class="check-row"><input id="orToolsOnly" type="checkbox" checked /><span>Tool-capable only</span></label>
           </div>
-          <div id="orCatalogList" style="max-height:260px;overflow-y:auto;">
+          <div id="orCatalogList">
             <div style="font-size:12px;color:var(--text-dim);">Click Fetch to browse live OpenRouter models.</div>
           </div>
         </div>
@@ -2190,9 +2343,106 @@
       }
     }
 
+    // ── Persistent Prompt History (atuin-inspired ↑/↓ in composer) ──────────
+    let promptHistory = [];
+    try {
+      promptHistory = JSON.parse(localStorage.getItem("poseidon_prompt_history") || "[]");
+      if (!Array.isArray(promptHistory)) promptHistory = [];
+    } catch (_e) { promptHistory = []; }
+    let historyCursor = promptHistory.length;
+
+    function pushPromptHistory(text) {
+      if (!text) return;
+      if (promptHistory[promptHistory.length - 1] !== text) {
+        promptHistory.push(text);
+        if (promptHistory.length > 100) promptHistory = promptHistory.slice(-100);
+        try { localStorage.setItem("poseidon_prompt_history", JSON.stringify(promptHistory)); } catch (_e) {}
+      }
+      historyCursor = promptHistory.length;
+    }
+
+    // ── Ctrl+K Global Command & File Palette (fzf-inspired) ─────────────────
+    let cmdkItems = [];
+    let cmdkIdx = 0;
+
+    function buildCmdkEntries() {
+      const items = [];
+      ((state && state.files) || []).forEach((f) => {
+        items.push({ kind: "file", label: f, sub: "Open file viewer", run: () => openFileDrawer(f) });
+      });
+      ((state && state.slash_commands) || []).forEach((c) => {
+        items.push({
+          kind: "cmd",
+          label: c.usage,
+          sub: c.desc,
+          run: () => {
+            if (c.usage.includes("<") || c.usage.includes("[args]")) {
+              els.promptInput.value = `${c.name} `;
+              els.promptInput.focus();
+            } else {
+              sendPrompt(c.name);
+            }
+          },
+        });
+      });
+      ((state && state.sessions) || []).forEach((s) => {
+        items.push({
+          kind: "session",
+          label: s.title || s.session_id,
+          sub: `Resume session (${s.message_count} msgs)`,
+          run: () => loadSession(s.session_id),
+        });
+      });
+      [
+        ["general", "Settings: General"],
+        ["providers", "Settings: Local AI (Ollama/LM Studio) & Cloud API Keys"],
+        ["models", "Settings: OpenRouter Catalog"],
+        ["mcp", "Settings: MCP Servers"],
+        ["commands", "Settings: Custom /Commands"],
+      ].forEach(([tab, label]) => {
+        items.push({ kind: "settings", label, sub: "Open settings modal", run: () => openSettingsDrawer(tab) });
+      });
+      return items;
+    }
+
+    function renderCmdkList() {
+      const q = els.cmdkInput.value.trim().toLowerCase();
+      const all = buildCmdkEntries();
+      cmdkItems = (q ? all.filter((x) => x.label.toLowerCase().includes(q) || x.sub.toLowerCase().includes(q)) : all).slice(0, 20);
+      cmdkIdx = Math.min(cmdkIdx, Math.max(0, cmdkItems.length - 1));
+      els.cmdkList.innerHTML = cmdkItems.length
+        ? cmdkItems.map((it, i) => `
+            <div class="cmdk-item ${i === cmdkIdx ? "selected" : ""}" data-cmdk="${i}">
+              <span class="mono truncate" style="color:var(--cyan-soft);">${esc(it.label)}</span>
+              <span style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                <span style="font-size:11.5px;color:var(--text-muted);">${esc(it.sub)}</span>
+                <span class="pill-tag">${esc(it.kind)}</span>
+              </span>
+            </div>`).join("")
+        : `<div style="padding:14px;text-align:center;font-size:12.5px;color:var(--text-dim);">No matches found.</div>`;
+      els.cmdkList.querySelectorAll("[data-cmdk]").forEach((el) => {
+        el.onclick = () => runCmdkItem(Number(el.dataset.cmdk));
+      });
+    }
+
+    function openCmdk() {
+      els.cmdkInput.value = "";
+      cmdkIdx = 0;
+      els.cmdkModal.classList.add("open");
+      renderCmdkList();
+      els.cmdkInput.focus();
+    }
+    function closeCmdk() { els.cmdkModal.classList.remove("open"); }
+    function runCmdkItem(idx) {
+      const it = cmdkItems[idx];
+      closeCmdk();
+      if (it) it.run();
+    }
+
     function sendPrompt(explicitText = null) {
       const text = (explicitText !== null ? explicitText : els.promptInput.value).trim();
       if (!text || busy || shuttingDown || !ws || ws.readyState !== WebSocket.OPEN) return;
+      pushPromptHistory(text);
       closeSlashMenu();
       els.promptInput.value = "";
       els.promptInput.style.height = "auto";
@@ -2380,7 +2630,11 @@
     els.saveBtn.onclick = () => sendPrompt("/save");
     els.newSessionBtn.onclick = () => sendPrompt("/clear");
 
-    els.closeDrawerBtn.onclick = () => els.drawer.classList.remove("open");
+    function closeDrawer() {
+      els.drawer.classList.remove("open");
+      els.drawer.setAttribute("aria-hidden", "true");
+    }
+    els.closeDrawerBtn.onclick = closeDrawer;
     els.copyDrawerBtn.onclick = async () => {
       try {
         await navigator.clipboard.writeText(lastDrawerRawText);
@@ -2394,9 +2648,26 @@
     els.deleteModal.onclick = (e) => { if (e.target === els.deleteModal) closeDeleteModal(); };
     els.closeSettingsModalBtn.onclick = closeSettingsModal;
     els.settingsModal.onclick = (e) => { if (e.target === els.settingsModal) closeSettingsModal(); };
+    els.cmdkModal.onclick = (e) => { if (e.target === els.cmdkModal) closeCmdk(); };
+    els.cmdkInput.oninput = () => { cmdkIdx = 0; renderCmdkList(); };
+    els.cmdkInput.onkeydown = (e) => {
+      if (e.key === "ArrowDown") { e.preventDefault(); cmdkIdx = (cmdkIdx + 1) % Math.max(1, cmdkItems.length); renderCmdkList(); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); cmdkIdx = (cmdkIdx - 1 + Math.max(1, cmdkItems.length)) % Math.max(1, cmdkItems.length); renderCmdkList(); }
+      else if (e.key === "Enter") { e.preventDefault(); runCmdkItem(cmdkIdx); }
+      else if (e.key === "Escape") { e.preventDefault(); closeCmdk(); }
+    };
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && els.deleteModal.classList.contains("open")) closeDeleteModal();
-      if (e.key === "Escape" && els.settingsModal.classList.contains("open")) closeSettingsModal();
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        if (els.cmdkModal.classList.contains("open")) closeCmdk(); else openCmdk();
+        return;
+      }
+      if (e.key === "Escape") {
+        if (els.cmdkModal.classList.contains("open")) closeCmdk();
+        if (els.deleteModal.classList.contains("open")) closeDeleteModal();
+        if (els.settingsModal.classList.contains("open")) closeSettingsModal();
+        if (els.drawer.classList.contains("open")) closeDrawer();
+      }
     });
 
     els.slashToggleBtn.onclick = () => {
@@ -2439,6 +2710,18 @@
           closeSlashMenu();
           return;
         }
+      }
+      if (e.key === "ArrowUp" && !els.promptInput.value.includes("\n") && promptHistory.length) {
+        e.preventDefault();
+        historyCursor = Math.max(0, historyCursor - 1);
+        els.promptInput.value = promptHistory[historyCursor] || "";
+        return;
+      }
+      if (e.key === "ArrowDown" && !els.promptInput.value.includes("\n") && promptHistory.length) {
+        e.preventDefault();
+        historyCursor = Math.min(promptHistory.length, historyCursor + 1);
+        els.promptInput.value = promptHistory[historyCursor] || "";
+        return;
       }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();

@@ -655,9 +655,15 @@ def _run_headless_print(
 
     full_prompt = prompt.strip()
     if not sys.stdin.isatty():
-        piped = sys.stdin.read().strip()
-        if piped:
-            full_prompt = f"{full_prompt}\n\n---\nPiped stdin input:\n```\n{piped[:12000]}\n```"
+        import select
+
+        ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+        if ready:
+            piped = sys.stdin.read().strip()
+            if piped:
+                full_prompt = (
+                    f"{full_prompt}\n\n---\nPiped stdin input:\n```\n{piped[:12000]}\n```"
+                )
 
     tool_state = ToolSessionState()
     mention = expand_file_mentions(full_prompt, guard, tool_state)
