@@ -21,6 +21,10 @@ from poseidon.context.compactor import compact_messages
 from poseidon.context.memory import load_project_memory, starter_poseidon_md
 from poseidon.context.sessions import SessionStore, generate_session_id
 from poseidon.core.agent import AgentRunResult, ToolEvent, build_system_prompt, run_agent_loop
+from poseidon.core.benchmark_challenge import (
+    ChallengeRunRow,
+    run_optional_challenge_benchmark,
+)
 from poseidon.core.benchmark_m2 import (
     DEFAULT_BENCHMARK_PROMPT,
     BenchmarkRow,
@@ -1129,6 +1133,86 @@ def compare_models(
 
     console.print()
     _render_model_comparison(rows)
+
+
+def _render_challenge_table(rows: list[ChallengeRunRow]) -> None:
+    table = Table(
+        title="Optional Challenge — Baseline (v1) vs. +AST Preflight (v2)",
+        border_style="bright_blue",
+    )
+    table.add_column("Task", style="bold white", overflow="fold")
+    table.add_column("Harness Version", style="bold cyan", no_wrap=True)
+    table.add_column("Visible Tests", overflow="fold")
+    table.add_column("Acceptance Test", overflow="fold")
+    table.add_column("Calls", justify="right", no_wrap=True)
+    table.add_column("Elapsed", justify="right", no_wrap=True)
+    table.add_column("Total Tokens", justify="right", no_wrap=True)
+
+    for row in rows:
+        vis_style = "bold green" if row.visible_passed else "bold red"
+        acc_style = "bold green" if row.acceptance_passed else "bold red"
+        table.add_row(
+            row.task_name,
+            row.harness_version,
+            f"[{vis_style}]{row.visible_summary}[/{vis_style}]",
+            f"[{acc_style}]{row.acceptance_summary}[/{acc_style}]",
+            f"{row.calls_made} / {row.max_calls}",
+            f"{row.elapsed_seconds:.2f}s",
+            _format_metric(row.total_tokens),
+        )
+    console.print(table)
+
+
+@app.command(name="benchmark-challenge")
+def benchmark_challenge(
+    model: Annotated[
+        str | None,
+        typer.Option("--model", "-m", help="OpenRouter model ID for before/after evaluation."),
+    ] = None,
+    base_workspace: Annotated[
+        Path,
+        typer.Option("--base-workspace", help="Clean base revision folder."),
+    ] = Path("/app/benchmarks/m5_base"),
+    max_calls: Annotated[
+        int,
+        typer.Option("--max-calls", help="Identical call limit for every run."),
+    ] = 10,
+    test_timeout: Annotated[
+        int,
+        typer.Option("--test-timeout", help="Isolated Docker test timeout in seconds."),
+    ] = 15,
+) -> None:
+    """Compare v1 (no preflight) vs. v2 (+AST preflight) on original and held-out tasks."""
+    settings = Settings()
+    chosen_model = model or settings.default_model
+
+    with OpenRouterClient(settings) as client:
+        chosen_model = _validate_or_reselect_model(client, chosen_model, interactive=False)
+        render_banner(console, model=chosen_model, workspace=base_workspace)
+
+        test_runner = DockerTestRunner(
+            image=settings.sandbox_image,
+            timeout_seconds=test_timeout,
+        )
+        tracer = PoseidonTracer(settings)
+
+        def _on_step(ver: str, task_name: str) -> None:
+            console.print(f"[bold cyan]▶ Running {ver} on {task_name}...[/bold cyan]")
+
+        rows = run_optional_challenge_benchmark(
+            client=client,
+            model=chosen_model,
+            base_workspace=base_workspace,
+            exclude_acceptance_path=Path("/app/acceptance_tests/test_exclude_acceptance.py"),
+            min_amount_acceptance_path=Path("/app/acceptance_tests/test_min_amount_heldout.py"),
+            test_runner=test_runner,
+            max_calls=max_calls,
+            tracer=tracer,
+            on_step=_on_step,
+        )
+
+    console.print()
+    _render_challenge_table(rows)
 
 
 @app.command()

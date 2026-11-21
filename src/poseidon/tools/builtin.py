@@ -8,6 +8,7 @@ from typing import Any
 
 from poseidon.context.checkpoints import WorkspaceCheckpointManager
 from poseidon.indexing.semantic_index import SemanticCodeIndex
+from poseidon.patching.python_preflight import check_python_source
 from poseidon.patching.unified_diff import (
     apply_unified_diff,
     extract_diff_payload,
@@ -66,6 +67,7 @@ def register_core_tools(
     hooks: HookManager | None = None,
     protect_tests: bool = True,
     read_only: bool = False,
+    enable_preflight: bool = True,
 ) -> None:
     """Register all built-in workspace tools strictly sandboxed to the workspace."""
 
@@ -181,6 +183,17 @@ def register_core_tools(
             )
 
         normalized = content if content.endswith("\n") else f"{content}\n"
+        preflight_warnings: list[str] = []
+        if enable_preflight:
+            pf = check_python_source(rel_path, normalized)
+            if not pf.ok:
+                return ToolExecutionResult(
+                    tool_name="create_file",
+                    ok=False,
+                    output=f"Error (Python preflight): {pf.syntax_error}. File was not written.",
+                    summary=f"syntax error blocked ({rel_path})",
+                )
+            preflight_warnings = pf.warnings
         if hooks is not None:
             rejection = hooks.run_pre_edit(rel_path, normalized)
             if rejection:
@@ -210,6 +223,10 @@ def register_core_tools(
         hook_notes = hooks.run_post_edit([rel_path]) if hooks is not None else []
         line_count = len(normalized.splitlines())
         out_msg = f"Created new file '{rel_path}' ({line_count} lines)."
+        if preflight_warnings:
+            out_msg += "\nPreflight static warnings:\n" + "\n".join(
+                f"  - {w}" for w in preflight_warnings
+            )
         if hook_notes:
             out_msg += "\n" + "\n".join(hook_notes)
         return ToolExecutionResult(
@@ -258,6 +275,27 @@ def register_core_tools(
             dry_run=True,
         )
 
+        # In-memory Python AST preflight check BEFORE confirmation or disk write
+        preflight_warnings: list[str] = []
+        if enable_preflight:
+            from poseidon.patching.unified_diff import _apply_hunks_to_text
+
+            for fp in file_patches:
+                current_src = workspace.read_text(fp.target_path)
+                candidate_src, _, _ = _apply_hunks_to_text(current_src, fp)
+                pf = check_python_source(fp.target_path, candidate_src)
+                if not pf.ok:
+                    return ToolExecutionResult(
+                        tool_name="apply_diff",
+                        ok=False,
+                        output=(
+                            f"Error (Python preflight): {pf.syntax_error}. "
+                            "Patch rejected before writing; fix the syntax and retry."
+                        ),
+                        summary=f"syntax error blocked ({fp.target_path})",
+                    )
+                preflight_warnings.extend(pf.warnings)
+
         if hooks is not None:
             for fp in file_patches:
                 rejection = hooks.run_pre_edit(fp.target_path, diff_text)
@@ -300,6 +338,9 @@ def register_core_tools(
             f"Applied {patch_res.hunks_applied} hunk(s) to {files_csv} "
             f"(+{patch_res.added_lines} / -{patch_res.removed_lines} lines)."
         )
+        if preflight_warnings:
+            out_msg += "\nPreflight static warnings (fix missing imports/names before testing):\n"
+            out_msg += "\n".join(f"  - {w}" for w in preflight_warnings)
         if hook_notes:
             out_msg += "\n" + "\n".join(hook_notes)
         return ToolExecutionResult(
