@@ -1,8 +1,9 @@
-"""Built-in Milestone 3 workspace tools: read_file and apply_diff."""
+"""Built-in workspace tools: read_file, apply_diff, and isolated run_tests."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from poseidon.patching.unified_diff import (
@@ -11,6 +12,7 @@ from poseidon.patching.unified_diff import (
     parse_unified_diff,
     sha256_text,
 )
+from poseidon.sandbox.docker_runner import TestRunner, TestRunResult
 from poseidon.tools.registry import (
     ToolDefinition,
     ToolExecutionResult,
@@ -25,14 +27,28 @@ def _format_numbered_lines(content: str) -> str:
     return "\n".join(f"{idx:4d} | {line}" for idx, line in enumerate(content.splitlines(), start=1))
 
 
+def is_test_file_path(relative_path: str) -> bool:
+    """Return True if a workspace path is a unit test file that should stay locked during repair."""
+    path = Path(relative_path)
+    name = path.name
+    if name.startswith("test_") and name.endswith(".py"):
+        return True
+    if name.endswith("_test.py"):
+        return True
+    return "tests" in path.parts
+
+
 def register_core_tools(
     *,
     registry: ToolRegistry,
     workspace: WorkspaceGuard,
     state: ToolSessionState,
     confirm_patch: Callable[[str], bool] | None = None,
+    test_runner: TestRunner | None = None,
+    on_test_result: Callable[[TestRunResult], None] | None = None,
+    protect_tests: bool = True,
 ) -> None:
-    """Register read_file and apply_diff strictly sandboxed to the workspace."""
+    """Register read_file, apply_diff, and (optionally) run_tests sandboxed to the workspace."""
 
     def handle_read_file(args: dict[str, Any]) -> ToolExecutionResult:
         rel_path = str(args["path"]).strip()
@@ -57,11 +73,21 @@ def register_core_tools(
         has_wrapper = "<diff>" in raw_diff or "```" in raw_diff
         diff_text = extract_diff_payload(raw_diff) if has_wrapper else raw_diff
 
-        # Parse first to check workspace containment and enforce read-before-edit
+        # Parse first to check workspace containment, test protection, and read-before-edit
         file_patches = parse_unified_diff(diff_text)
         for fp in file_patches:
             target = fp.target_path
             workspace.resolve_path(target)
+            if protect_tests and is_test_file_path(target):
+                return ToolExecutionResult(
+                    tool_name="apply_diff",
+                    ok=False,
+                    output=(
+                        f"Error: '{target}' is a protected unit-test file and cannot be modified "
+                        "during repair. Fix the implementation code instead."
+                    ),
+                    summary=f"blocked edit to protected test file {target}",
+                )
             if target not in state.read_hashes:
                 return ToolExecutionResult(
                     tool_name="apply_diff",
@@ -98,9 +124,10 @@ def register_core_tools(
             dry_run=False,
         )
 
-        # Refresh recorded hashes so subsequent diffs in the same run can apply cleanly
+        # Refresh recorded hashes and mark workspace dirty until unit tests pass
         for rel_path in patch_res.modified_files:
             state.read_hashes[rel_path] = sha256_text(workspace.read_text(rel_path))
+        state.dirty_since_last_test = True
 
         files_csv = ", ".join(patch_res.modified_files)
         return ToolExecutionResult(
@@ -142,7 +169,8 @@ def register_core_tools(
             description=(
                 "Apply a Git unified diff to an existing workspace file. "
                 "Requires standard --- a/path, +++ b/path, and @@ hunk headers with exact context. "
-                "The entire patch is validated atomically before writing."
+                "The entire patch is validated atomically before writing. "
+                "Unit test files are protected during repair."
             ),
             parameters={
                 "type": "object",
@@ -160,3 +188,40 @@ def register_core_tools(
             handler=handle_apply_diff,
         )
     )
+
+    if test_runner is not None:
+
+        def handle_run_tests(_args: dict[str, Any]) -> ToolExecutionResult:
+            res = test_runner.run(workspace.root)
+            state.last_test_result = res
+            state.dirty_since_last_test = False
+            if on_test_result is not None:
+                on_test_result(res)
+            summary = (
+                f"PASS ({res.passed}/{res.total} passed)"
+                if res.verified
+                else f"UNVERIFIED ({res.unverified_reason or 'tests failed'})"
+            )
+            return ToolExecutionResult(
+                tool_name="run_tests",
+                ok=res.verified,
+                output=res.format_for_model(),
+                summary=summary,
+            )
+
+        registry.register(
+            ToolDefinition(
+                name="run_tests",
+                description=(
+                    "Run the full unit test suite inside a disposable network-isolated Docker "
+                    "sandbox with no secrets. Returns exit status, pass/fail counts, failing "
+                    "test names, and error messages."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+                handler=handle_run_tests,
+            )
+        )

@@ -117,3 +117,16 @@ def test_extract_diff_payload_variants() -> None:
 
     with pytest.raises(PatchError):
         extract_diff_payload("No diff here.")
+
+
+def test_noop_diff_is_rejected(tmp_path: Path) -> None:
+    guard = WorkspaceGuard(tmp_path)
+    guard.write_text("sample.py", SAMPLE_SOURCE)
+    noop_diff = """--- a/sample.py
++++ b/sample.py
+@@ -4,3 +4,3 @@
+ def add(a: int, b: int) -> int:
+     return a - b
+"""
+    with pytest.raises(PatchApplyError, match="No-op patch rejected"):
+        apply_unified_diff(workspace=guard, diff_text=noop_diff)

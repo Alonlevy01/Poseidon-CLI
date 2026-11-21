@@ -7,6 +7,7 @@ from typing import Any
 from poseidon.core.agent import run_agent_loop
 from poseidon.llm.openrouter import ChatResponse, TokenUsage, ToolCall
 from poseidon.observability.respan import PoseidonTracer
+from poseidon.sandbox.docker_runner import TestFailure, TestRunResult
 from poseidon.tools.builtin import register_core_tools
 from poseidon.tools.registry import ToolRegistry, ToolSessionState
 from poseidon.workspace import WorkspaceGuard
@@ -161,3 +162,158 @@ def test_agent_loop_enforces_max_calls_limit(tmp_path: Path) -> None:
     assert result.max_calls == 2
     assert "limit" in result.stop_reason
     assert len(client.received_messages) == 2
+
+
+class ScriptedTestRunner:
+    """Fake isolated test runner for testing post-edit auto-verification and repair loops."""
+
+    def __init__(self, results: list[TestRunResult]) -> None:
+        self._results = list(results)
+        self.runs = 0
+
+    @property
+    def timeout_seconds(self) -> int:
+        return 15
+
+    def run(
+        self,
+        workspace_root: Path,
+        *,
+        test_args: list[str] | None = None,
+        extra_files: dict[str, str] | None = None,
+    ) -> TestRunResult:
+        self.runs += 1
+        return self._results.pop(0)
+
+
+def test_agent_auto_verifies_edit_and_repairs_failing_test(tmp_path: Path) -> None:
+    guard = WorkspaceGuard(tmp_path)
+    guard.write_text("calc.py", "def add(a, b):\n    return a - b\n")
+    state = ToolSessionState()
+    fail_res = TestRunResult(
+        command="pytest -v --tb=short",
+        timeout_seconds=15,
+        exit_code=1,
+        passed=0,
+        failed=1,
+        total=1,
+        failures=[TestFailure(name="test_calc::test_add", message="assert -1 == 5")],
+        output="FAILED test_calc.py::test_add",
+        verified=False,
+        unverified_reason="1 test(s) failed, 0 error(s) (exit status 1).",
+    )
+    pass_res = TestRunResult(
+        command="pytest -v --tb=short",
+        timeout_seconds=15,
+        exit_code=0,
+        passed=1,
+        failed=0,
+        total=1,
+        output="1 passed",
+        verified=True,
+    )
+    runner = ScriptedTestRunner([fail_res, pass_res])
+    registry = ToolRegistry()
+    register_core_tools(registry=registry, workspace=guard, state=state, test_runner=runner)
+
+    bad_fix = (
+        "--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,2 @@\n"
+        " def add(a, b):\n-    return a - b\n+    return a * b\n"
+    )
+    good_fix = (
+        "--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,2 @@\n"
+        " def add(a, b):\n-    return a * b\n+    return a + b\n"
+    )
+    client = ScriptedToolClient(
+        [
+            _resp(
+                tool_calls=[
+                    ToolCall(id="c1", name="read_file", arguments=json.dumps({"path": "calc.py"}))
+                ]
+            ),
+            _resp(
+                tool_calls=[
+                    ToolCall(id="c2", name="apply_diff", arguments=json.dumps({"diff": bad_fix}))
+                ]
+            ),
+            # Model tries to stop without running tests -> harness auto-runs tests & detects failure
+            _resp(content="I think it is fixed."),
+            # Harness feeds failure back -> model repairs and calls run_tests
+            _resp(
+                tool_calls=[
+                    ToolCall(id="c3", name="apply_diff", arguments=json.dumps({"diff": good_fix}))
+                ]
+            ),
+            _resp(tool_calls=[ToolCall(id="c4", name="run_tests", arguments="{}")]),
+            _resp(content="Fixed add to return a + b; all tests pass."),
+        ]
+    )
+
+    result = run_agent_loop(
+        client=client,
+        registry=registry,
+        model="nvidia/nemotron-3.5-super-vl:free",
+        user_prompt="Fix add in calc.py.",
+        max_calls=8,
+        tracer=PoseidonTracer(enabled=False),
+        workspace_root=guard.root,
+        tool_state=state,
+        test_runner=runner,
+    )
+
+    assert runner.runs == 2
+    assert result.edit_verified is True
+    assert "verified (1/1 passed)" in result.stop_reason
+    assert "return a + b" in guard.read_text("calc.py")
+
+
+def test_agent_marks_edit_unverified_on_timeout(tmp_path: Path) -> None:
+    guard = WorkspaceGuard(tmp_path)
+    guard.write_text("calc.py", "def add(a, b):\n    return a - b\n")
+    state = ToolSessionState()
+    timeout_res = TestRunResult(
+        command="pytest -v --tb=short",
+        timeout_seconds=5,
+        exit_code=None,
+        timed_out=True,
+        verified=False,
+        unverified_reason="Test run timed out after 5s.",
+    )
+    runner = ScriptedTestRunner([timeout_res])
+    registry = ToolRegistry()
+    register_core_tools(registry=registry, workspace=guard, state=state, test_runner=runner)
+
+    good_fix = (
+        "--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,2 @@\n"
+        " def add(a, b):\n-    return a - b\n+    return a + b\n"
+    )
+    client = ScriptedToolClient(
+        [
+            _resp(
+                tool_calls=[
+                    ToolCall(id="c1", name="read_file", arguments=json.dumps({"path": "calc.py"}))
+                ]
+            ),
+            _resp(
+                tool_calls=[
+                    ToolCall(id="c2", name="apply_diff", arguments=json.dumps({"diff": good_fix}))
+                ]
+            ),
+            _resp(content="Done."),
+        ]
+    )
+
+    result = run_agent_loop(
+        client=client,
+        registry=registry,
+        model="nvidia/nemotron-3.5-super-vl:free",
+        user_prompt="Fix calc.py",
+        max_calls=6,
+        tracer=PoseidonTracer(enabled=False),
+        workspace_root=guard.root,
+        tool_state=state,
+        test_runner=runner,
+    )
+
+    assert result.edit_verified is False
+    assert "timed out after 5s" in result.stop_reason

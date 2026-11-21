@@ -7,9 +7,20 @@ services:
     env_file:
       - path: .env
         required: false
+    group_add:
+      - "0"
     volumes:
       - ./demo_workspace:/workspace
       - ./tests:/app/tests:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     stdin_open: true
     tty: true
     working_dir: /workspace
+
+  poseidon-sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    image: poseidon-sandbox:dev
+    profiles:
+      - build-only

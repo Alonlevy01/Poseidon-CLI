@@ -296,6 +296,11 @@ def apply_unified_diff(
         total_added += added
         total_removed += removed
 
+    if total_added == 0 and total_removed == 0:
+        raise PatchApplyError(
+            "No-op patch rejected: diff contains no added ('+') or removed ('-') lines."
+        )
+
     if not dry_run:
         for rel_path, new_content in staged_writes.items():
             workspace.write_text(rel_path, new_content)

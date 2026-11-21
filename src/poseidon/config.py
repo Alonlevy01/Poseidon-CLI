@@ -31,6 +31,14 @@ class Settings(BaseSettings):
         default=8,
         alias="POSEIDON_MAX_CALLS",
     )
+    default_test_timeout: int = Field(
+        default=15,
+        alias="POSEIDON_TEST_TIMEOUT",
+    )
+    sandbox_image: str = Field(
+        default="poseidon-sandbox:dev",
+        alias="POSEIDON_SANDBOX_IMAGE",
+    )
     request_timeout_seconds: float = Field(
         default=120.0,
         alias="POSEIDON_REQUEST_TIMEOUT",

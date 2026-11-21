@@ -1,0 +1,18 @@
+# Official Docker Hub Python image — disposable isolated test sandbox
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Install only pytest for isolated unit-test execution
+RUN pip install --no-cache-dir pytest>=8.3.0
+
+# Run untrusted generated code and tests strictly as a non-root user
+RUN useradd --create-home --shell /bin/sh sandbox \
+    && mkdir -p /sandbox /tmp \
+    && chown -R sandbox:sandbox /sandbox
+
+WORKDIR /sandbox
+USER sandbox
+
+CMD ["pytest", "-v", "--tb=short"]

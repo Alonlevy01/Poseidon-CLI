@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from poseidon.patching.unified_diff import PatchError
+from poseidon.sandbox.docker_runner import TestRunResult
 from poseidon.workspace import WorkspaceSecurityError
 
 
@@ -46,9 +47,11 @@ class ToolDefinition:
 
 @dataclass
 class ToolSessionState:
-    """Shared per-run state for workspace tools (e.g., SHA-256 read hashes)."""
+    """Shared per-run state for workspace tools (read hashes and test verification)."""
 
     read_hashes: dict[str, str] = field(default_factory=dict)
+    dirty_since_last_test: bool = False
+    last_test_result: TestRunResult | None = None
 
 
 class ToolRegistry:

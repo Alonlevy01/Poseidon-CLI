@@ -32,6 +32,7 @@ from poseidon.llm.openrouter import (
 )
 from poseidon.observability.respan import PoseidonTracer
 from poseidon.patching.unified_diff import PatchError, apply_unified_diff
+from poseidon.sandbox.docker_runner import DockerTestRunner, TestRunResult
 from poseidon.tools.builtin import register_core_tools
 from poseidon.tools.registry import ToolRegistry, ToolSessionState
 from poseidon.workspace import WorkspaceGuard, WorkspaceSecurityError
@@ -79,6 +80,45 @@ def _format_output_tokens(usage: TokenUsage) -> str:
 
 def _format_cost(cost: float | None) -> str:
     return f"${cost:.6f}" if cost is not None else "unavailable"
+
+
+def _render_test_result(result: TestRunResult) -> None:
+    """Display structured isolated test-runner output in the terminal."""
+    border = "green" if result.verified else "red"
+    status_badge = (
+        "[bold green]VERIFIED[/bold green]"
+        if result.verified
+        else "[bold red]UNVERIFIED[/bold red]"
+    )
+
+    lines = [
+        f"[bold]Command:[/bold]   {result.command}",
+        "[bold]Sandbox:[/bold]   disposable Docker (--network none | zero secrets)",
+        f"[bold]Timeout:[/bold]   {result.timeout_seconds}s  |  "
+        f"[bold]Exit:[/bold] {result.exit_code}  |  "
+        f"[bold]Elapsed:[/bold] {result.elapsed_seconds:.2f}s",
+        f"[bold]Results:[/bold]   [green]{result.passed} passed[/green], "
+        f"[red]{result.failed} failed[/red], "
+        f"[yellow]{result.errors} errors[/yellow], "
+        f"{result.skipped} skipped (total {result.total})",
+        f"[bold]Status:[/bold]    {status_badge}",
+    ]
+    if result.unverified_reason:
+        lines.append(f"[bold red]Reason:[/bold red]    {result.unverified_reason}")
+
+    if result.failures:
+        lines.append("\n[bold red]Failing Tests:[/bold red]")
+        for fail in result.failures:
+            lines.append(f"  [red]✗ {fail.name}[/red]")
+            lines.append(f"    {fail.message}")
+
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="[bold cyan]Isolated Unit Test Report[/bold cyan]",
+            border_style=border,
+        )
+    )
 
 
 def _render_single_file_result(result: SingleFileResult, *, show_code: bool = True) -> None:
@@ -180,6 +220,12 @@ def _render_agent_result(result: AgentRunResult) -> None:
     metrics.add_row("[bold]Stop reason:[/bold]", result.stop_reason)
     if result.modified_files:
         metrics.add_row("[bold]Modified files:[/bold]", ", ".join(result.modified_files))
+        verified_str = (
+            "[bold green]VERIFIED[/bold green]"
+            if result.edit_verified
+            else "[bold red]UNVERIFIED[/bold red]"
+        )
+        metrics.add_row("[bold]Edit status:[/bold]", verified_str)
     metrics.add_row("[bold]Output tokens:[/bold]", _format_output_tokens(result.usage))
     metrics.add_row("[bold]Total tokens:[/bold]", _format_metric(result.usage.total_tokens))
     metrics.add_row("[bold]Elapsed:[/bold]", f"{result.elapsed_seconds:.2f}s")
@@ -201,20 +247,28 @@ def _run_agent_with_ui(
     model: str,
     prompt: str,
     max_calls: int,
+    test_timeout: int,
     auto_approve: bool,
     tool_state: ToolSessionState | None = None,
     conversation_history: list[dict[str, Any]] | None = None,
     tracer: PoseidonTracer | None = None,
 ) -> AgentRunResult:
-    """Execute the native tool-calling agent with live step printing and diff confirmation."""
+    """Execute the native tool-calling agent with live progress, diff preview, and Docker tests."""
     registry = ToolRegistry()
     state = tool_state if tool_state is not None else ToolSessionState()
+    test_runner = DockerTestRunner(
+        image=settings.sandbox_image,
+        timeout_seconds=test_timeout,
+    )
 
     register_core_tools(
         registry=registry,
         workspace=workspace,
         state=state,
         confirm_patch=lambda d: _preview_diff(d, auto_approve=auto_approve),
+        test_runner=test_runner,
+        on_test_result=_render_test_result,
+        protect_tests=True,
     )
 
     def _on_model_call(call_num: int, limit: int) -> None:
@@ -238,6 +292,10 @@ def _run_agent_with_ui(
         conversation_history=conversation_history,
         on_model_call=_on_model_call,
         on_tool_result=_on_tool_result,
+        workspace_root=workspace.root,
+        tool_state=state,
+        test_runner=test_runner,
+        on_test_result=_render_test_result,
     )
 
 
@@ -289,6 +347,35 @@ def models() -> None:
 
 
 @app.command()
+def test(
+    workspace: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Workspace folder containing code and unit tests."),
+    ] = Path("."),
+    timeout: Annotated[
+        int | None,
+        typer.Option("--timeout", "-t", help="Test execution timeout in seconds."),
+    ] = None,
+) -> None:
+    """Run workspace unit tests inside a disposable --network none Docker sandbox."""
+    settings = Settings()
+    effective_timeout = timeout if timeout is not None else settings.default_test_timeout
+    guard = WorkspaceGuard(workspace)
+
+    runner = DockerTestRunner(
+        image=settings.sandbox_image,
+        timeout_seconds=effective_timeout,
+    )
+    with console.status(
+        f"[cyan]Running tests in isolated Docker sandbox (timeout {effective_timeout}s)...[/cyan]"
+    ):
+        result = runner.run(guard.root)
+    _render_test_result(result)
+    if not result.verified:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def run(
     prompt: Annotated[
         str,
@@ -322,7 +409,7 @@ def run(
         str,
         typer.Option(
             "--mode",
-            help="Execution mode: 'agent' (native tools, default), 'diff', or 'whole'.",
+            help="Execution mode: 'agent' (native tools + Docker tests, default), 'diff', 'whole'.",
         ),
     ] = "agent",
     max_calls: Annotated[
@@ -330,6 +417,13 @@ def run(
         typer.Option(
             "--max-calls",
             help="Maximum model calls allowed per run (enforced in agent mode).",
+        ),
+    ] = None,
+    test_timeout: Annotated[
+        int | None,
+        typer.Option(
+            "--test-timeout",
+            help="Isolated Docker test timeout in seconds.",
         ),
     ] = None,
     yes: Annotated[
@@ -345,6 +439,7 @@ def run(
     settings = Settings()
     chosen_model = model or settings.default_model
     call_limit = max_calls if max_calls is not None else settings.default_max_calls
+    effective_timeout = test_timeout if test_timeout is not None else settings.default_test_timeout
 
     if mode not in {"agent", "diff", "whole"}:
         console.print("[bold red]Error:[/bold red] --mode must be 'agent', 'diff', or 'whole'.")
@@ -368,6 +463,7 @@ def run(
                     model=chosen_model,
                     prompt=prompt,
                     max_calls=call_limit,
+                    test_timeout=effective_timeout,
                     auto_approve=yes,
                 )
                 _render_agent_result(agent_res)
@@ -528,12 +624,16 @@ def chat(
         str,
         typer.Option(
             "--mode",
-            help="Execution mode: 'agent' (native tools, default), 'diff', or 'whole'.",
+            help="Execution mode: 'agent' (native tools + Docker tests, default), 'diff', 'whole'.",
         ),
     ] = "agent",
     max_calls: Annotated[
         int | None,
         typer.Option("--max-calls", help="Maximum model calls allowed per request."),
+    ] = None,
+    test_timeout: Annotated[
+        int | None,
+        typer.Option("--test-timeout", help="Isolated Docker test timeout in seconds."),
     ] = None,
     yes: Annotated[
         bool,
@@ -543,6 +643,7 @@ def chat(
     """Start an interactive Poseidon-CLI session inside a workspace."""
     settings = Settings()
     call_limit = max_calls if max_calls is not None else settings.default_max_calls
+    effective_timeout = test_timeout if test_timeout is not None else settings.default_test_timeout
     auto_approve = yes
 
     try:
@@ -554,8 +655,12 @@ def chat(
     chosen_model = model or _select_model_interactive(settings.default_model)
     render_banner(console, model=chosen_model, workspace=guard.root)
     console.print(
-        f"[dim]Mode: {mode} | Max calls: {call_limit} | Auto-edit: {auto_approve} | "
-        "Commands: /model, /limit <n>, /auto <on|off>, /mode, /files, /exit[/dim]\n"
+        f"[dim]Mode: {mode} | Max calls: {call_limit} | Test timeout: {effective_timeout}s | "
+        f"Auto-edit: {auto_approve}[/dim]"
+    )
+    console.print(
+        "[dim]Commands: /test, /model, /limit <n>, /timeout <s>, "
+        "/auto <on|off>, /mode, /files, /exit[/dim]\n"
     )
 
     tool_state = ToolSessionState()
@@ -581,6 +686,14 @@ def chat(
                     f"[yellow]Workspace files:[/yellow] {', '.join(files) if files else '(empty)'}"
                 )
                 continue
+            if user_input == "/test":
+                runner = DockerTestRunner(
+                    image=settings.sandbox_image,
+                    timeout_seconds=effective_timeout,
+                )
+                res = runner.run(guard.root)
+                _render_test_result(res)
+                continue
             if user_input == "/model":
                 chosen_model = _select_model_interactive(chosen_model)
                 console.print(f"[green]Active model switched to:[/green] {chosen_model}")
@@ -592,6 +705,14 @@ def chat(
                     console.print(f"[green]Model-call limit set to:[/green] {call_limit}")
                 else:
                     console.print("[yellow]Usage: /limit <positive_integer>[/yellow]")
+                continue
+            if user_input.startswith("/timeout"):
+                parts = user_input.split()
+                if len(parts) == 2 and parts[1].isdigit() and int(parts[1]) >= 1:
+                    effective_timeout = int(parts[1])
+                    console.print(f"[green]Test timeout set to:[/green] {effective_timeout}s")
+                else:
+                    console.print("[yellow]Usage: /timeout <seconds>[/yellow]")
                 continue
             if user_input.startswith("/auto"):
                 parts = user_input.split()
@@ -619,6 +740,7 @@ def chat(
                         model=chosen_model,
                         prompt=user_input,
                         max_calls=call_limit,
+                        test_timeout=effective_timeout,
                         auto_approve=auto_approve,
                         tool_state=tool_state,
                         conversation_history=history,

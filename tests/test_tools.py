@@ -107,3 +107,22 @@ def test_tools_block_workspace_escape_and_bad_json(tmp_path: Path) -> None:
     unknown = registry.execute("delete_everything", "{}")
     assert not unknown.ok
     assert "unknown tool" in unknown.output
+
+
+def test_apply_diff_protects_unit_test_files_during_repair(tmp_path: Path) -> None:
+    guard, registry = _build_registry(tmp_path)
+    guard.write_text("test_math_ops.py", "def test_mul():\n    assert False\n")
+    assert registry.execute("read_file", json.dumps({"path": "test_math_ops.py"})).ok
+
+    diff = (
+        "--- a/test_math_ops.py\n"
+        "+++ b/test_math_ops.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def test_mul():\n"
+        "-    assert False\n"
+        "+    assert True\n"
+    )
+    res = registry.execute("apply_diff", json.dumps({"diff": diff}))
+    assert not res.ok
+    assert "protected unit-test file" in res.output
+    assert "assert False" in guard.read_text("test_math_ops.py")
