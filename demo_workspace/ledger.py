@@ -66,6 +66,11 @@ def main() -> None:
         default=None,
         help="Optional budget limit to compare against the grand total.",
     )
+    parser.add_argument(
+        "--currency",
+        default="$",
+        help="Currency symbol to prefix monetary amounts with.",
+    )
 
     args = parser.parse_args()
 
@@ -82,18 +87,18 @@ def main() -> None:
     for category in sorted(totals):
         category_total = totals[category]
         grand_total += category_total
-        print(f"{category}: {category_total:.2f}")
+        print(f"{category}: {args.currency}{category_total:.2f}")
 
-    print(f"Grand total: {grand_total:.2f}")
+    print(f"Grand total: {args.currency}{grand_total:.2f}")
 
     if args.budget is not None:
-        print(f"Budget: {args.budget:.2f}")
+        print(f"Budget: {args.currency}{args.budget:.2f}")
         remaining = args.budget - grand_total
         if remaining >= 0:
-            print(f"Remaining: {remaining:.2f}")
+            print(f"Remaining: {args.currency}{remaining:.2f}")
         else:
             exceeded = grand_total - args.budget
-            print(f"OVER BUDGET by {exceeded:.2f}")
+            print(f"OVER BUDGET by {args.currency}{exceeded:.2f}")
 
 
 if __name__ == "__main__":
