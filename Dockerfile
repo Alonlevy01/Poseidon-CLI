@@ -7,6 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Install ripgrep for fast, structured code search (Milestone 5+)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install uv for fast, deterministic lockfile installs
 RUN pip install --no-cache-dir uv
 

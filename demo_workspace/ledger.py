@@ -2,54 +2,16 @@
 
 import argparse
 
-
-def parse_expenses(value: str) -> dict:
-    """Parse a comma-separated string of category:amount pairs into a dict of category totals.
-
-    Validates that each amount is a positive number. Raises argparse.ArgumentTypeError
-    on any malformed or invalid input so argparse can display a clean error message.
-    """
-    if not value:
-        return {}
-
-    totals: dict[str, float] = {}
-    pairs = value.split(",")
-
-    for raw_pair in pairs:
-        pair = raw_pair.strip()
-        if not pair:
-            continue
-
-        if ":" not in pair:
-            raise argparse.ArgumentTypeError(
-                f"Invalid expense pair '{pair}': expected format category:amount"
-            )
-
-        category, amount_str = pair.split(":", 1)
-        category = category.strip()
-        amount_str = amount_str.strip()
-
-        if not category:
-            raise argparse.ArgumentTypeError(
-                f"Invalid expense pair '{pair}': category name is empty"
-            )
-
-        try:
-            amount = float(amount_str)
-        except ValueError:
-            raise argparse.ArgumentTypeError(
-                f"Invalid amount '{amount_str}' in pair '{pair}': not a number"
-            )
-
-        if amount <= 0:
-            raise argparse.ArgumentTypeError(
-                f"Invalid amount {amount} in pair '{pair}': must be a positive number"
-            )
-
-        totals[category] = totals.get(category, 0.0) + amount
-
-    return totals
-
+from analytics import calculate_budget_status, calculate_grand_total, filter_excluded_categories, sort_categories
+from formatter import (
+    format_budget_line,
+    format_excluded_line,
+    format_category_line,
+    format_grand_total,
+    format_over_budget_line,
+    format_remaining_line,
+)
+from parser import parse_expenses
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -72,6 +34,11 @@ def main() -> None:
         help="Currency symbol to prefix monetary amounts with.",
     )
     parser.add_argument(
+        "--exclude",
+        default="",
+        help="Comma-separated list of categories to ignore before computing totals.",
+    )
+    parser.add_argument(
         "--sort",
         choices=["name", "amount"],
         default="name",
@@ -89,26 +56,33 @@ def main() -> None:
         print("No expenses provided.")
         return
 
-    grand_total = 0.0
-    if args.sort == "amount":
-        ordered = sorted(totals, key=lambda c: totals[c], reverse=True)
-    else:
-        ordered = sorted(totals)
+    excluded = [cat.strip() for cat in args.exclude.split(",") if cat.strip()]
+    excluded_sorted = sorted(excluded)
+    if excluded_sorted:
+        totals = filter_excluded_categories(totals, excluded_sorted)
+
+    if not totals:
+        print("No expenses provided.")
+        return
+
+    ordered = sort_categories(totals, args.sort)
     for category in ordered:
         category_total = totals[category]
-        grand_total += category_total
-        print(f"{category}: {args.currency}{category_total:.2f}")
+        print(format_category_line(category, category_total, args.currency))
 
-    print(f"Grand total: {args.currency}{grand_total:.2f}")
+    grand_total = calculate_grand_total(totals)
+    print(format_grand_total(grand_total, args.currency))
+
+    if excluded_sorted:
+        print(format_excluded_line(excluded_sorted))
 
     if args.budget is not None:
-        print(f"Budget: {args.currency}{args.budget:.2f}")
-        remaining = args.budget - grand_total
-        if remaining >= 0:
-            print(f"Remaining: {args.currency}{remaining:.2f}")
+        status = calculate_budget_status(grand_total, args.budget)
+        print(format_budget_line(status["budget"], args.currency))
+        if status["over_budget"]:
+            print(format_over_budget_line(status["exceeded"], args.currency))
         else:
-            exceeded = grand_total - args.budget
-            print(f"OVER BUDGET by {args.currency}{exceeded:.2f}")
+            print(format_remaining_line(status["remaining"], args.currency))
 
 
 if __name__ == "__main__":

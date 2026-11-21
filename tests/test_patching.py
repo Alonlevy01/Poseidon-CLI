@@ -89,8 +89,10 @@ def test_bad_patch_is_atomic_and_leaves_file_intact(tmp_path: Path) -> None:
 -    return a * b
 +    return a + b
 """
-    with pytest.raises(PatchApplyError, match="Hunk #2"):
+    with pytest.raises(PatchApplyError, match="Hunk #2") as exc_info:
         apply_unified_diff(workspace=guard, diff_text=bad_diff)
+    assert "Actual lines around line" in str(exc_info.value)
+    assert "return a - b" in str(exc_info.value)
 
     # Hunk 1 must NOT have been written
     assert guard.read_text("sample.py") == SAMPLE_SOURCE

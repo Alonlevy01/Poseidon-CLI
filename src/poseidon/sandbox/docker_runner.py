@@ -21,18 +21,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field
 
-EXCLUDED_SANDBOX_DIRS = {
-    ".git",
-    ".venv",
-    "venv",
-    "__pycache__",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".mypy_cache",
-    ".poseidon",
-    ".poseidon_cache",
-    "node_modules",
-}
+from poseidon.workspace import WorkspaceGuard
 
 
 class TestFailure(BaseModel):
@@ -115,7 +104,7 @@ def build_workspace_tar(
             if not path.is_file():
                 continue
             rel = path.relative_to(workspace_root)
-            if any(part.startswith(".") or part in EXCLUDED_SANDBOX_DIRS for part in rel.parts):
+            if WorkspaceGuard.is_excluded(rel):
                 continue
             data = path.read_bytes()
             info = tarfile.TarInfo(name=rel.as_posix())

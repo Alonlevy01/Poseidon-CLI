@@ -30,7 +30,14 @@ def test_registry_exports_openrouter_schemas(tmp_path: Path) -> None:
     _, registry = _build_registry(tmp_path)
     schemas = registry.schemas()
     names = [s["function"]["name"] for s in schemas]
-    assert names == ["read_file", "apply_diff"]
+    assert names == [
+        "list_files",
+        "read_file",
+        "read_lines",
+        "search_text",
+        "create_file",
+        "apply_diff",
+    ]
     assert all(s["type"] == "function" for s in schemas)
 
 
@@ -126,3 +133,95 @@ def test_apply_diff_protects_unit_test_files_during_repair(tmp_path: Path) -> No
     assert not res.ok
     assert "protected unit-test file" in res.output
     assert "assert False" in guard.read_text("test_math_ops.py")
+
+
+def test_list_files_read_lines_search_text_and_create_file(tmp_path: Path) -> None:
+    guard, registry = _build_registry(tmp_path)
+
+    listed = registry.execute("list_files", "{}")
+    assert listed.ok
+    assert "math_ops.py" in listed.output
+
+    created = registry.execute(
+        "create_file",
+        json.dumps({"path": "formatter.py", "content": "def fmt(n):\n    return f'${n:.2f}'\n"}),
+    )
+    assert created.ok
+    assert created.modified_files == ["formatter.py"]
+
+    # Overwriting existing file via create_file must be refused
+    dup = registry.execute(
+        "create_file",
+        json.dumps({"path": "formatter.py", "content": "x = 1\n"}),
+    )
+    assert not dup.ok
+    assert "already exists" in dup.output
+
+    # Search finds symbol in new file
+    found = registry.execute("search_text", json.dumps({"query": "def fmt"}))
+    assert found.ok
+    assert "formatter.py:1:" in found.output
+
+    # read_lines works and records hash so apply_diff succeeds immediately afterward
+    ranged = registry.execute(
+        "read_lines",
+        json.dumps({"path": "formatter.py", "start_line": 1, "end_line": 2}),
+    )
+    assert ranged.ok
+    assert "def fmt" in ranged.output
+    diff = (
+        "--- a/formatter.py\n"
+        "+++ b/formatter.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def fmt(n):\n"
+        "-    return f'${n:.2f}'\n"
+        "+    return f'USD {n:.2f}'\n"
+    )
+    patched = registry.execute("apply_diff", json.dumps({"diff": diff}))
+    assert patched.ok
+    assert "USD" in guard.read_text("formatter.py")
+
+
+def test_run_tests_short_circuits_redundant_calls_without_edits(tmp_path: Path) -> None:
+    from poseidon.sandbox.docker_runner import TestRunResult
+
+    class CountingRunner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        @property
+        def timeout_seconds(self) -> int:
+            return 15
+
+        def run(
+            self,
+            workspace_root: Path,
+            *,
+            test_args: list[str] | None = None,
+            extra_files: dict[str, str] | None = None,
+        ) -> TestRunResult:
+            self.calls += 1
+            return TestRunResult(
+                command="pytest -v --tb=short",
+                timeout_seconds=15,
+                exit_code=0,
+                passed=3,
+                total=3,
+                verified=True,
+            )
+
+    guard = WorkspaceGuard(tmp_path)
+    runner = CountingRunner()
+    registry = ToolRegistry()
+    register_core_tools(
+        registry=registry,
+        workspace=guard,
+        state=ToolSessionState(),
+        test_runner=runner,
+    )
+
+    first = registry.execute("run_tests", "{}")
+    second = registry.execute("run_tests", "{}")
+    assert first.ok and second.ok
+    assert runner.calls == 1
+    assert "no files changed" in second.output.lower()

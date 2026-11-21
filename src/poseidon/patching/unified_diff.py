@@ -208,9 +208,15 @@ def _apply_hunks_to_text(original_text: str, file_patch: FilePatch) -> tuple[str
         match_idx = _find_hunk_position(lines, expected_old, expected_idx)
 
         if match_idx is None:
+            lo = max(0, expected_idx - 3)
+            hi = min(len(lines), expected_idx + max(len(expected_old), 6) + 3)
+            snippet = "\n".join(
+                f"{ln:4d} | {lines[ln - 1]}" for ln in range(lo + 1, hi + 1)
+            )
             raise PatchApplyError(
                 f"Hunk #{hunk_idx} for '{file_patch.target_path}' (around line {hunk.old_start}) "
-                "did not match the file contents; patch aborted and file left unchanged."
+                "did not match the file contents; patch aborted and file left unchanged.\n"
+                f"Actual lines around line {hunk.old_start}:\n{snippet}"
             )
 
         lines[match_idx : match_idx + len(expected_old)] = replacement_new
