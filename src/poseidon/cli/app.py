@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import shlex
+import sys
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -18,8 +21,17 @@ from poseidon.cli.banner import render_banner
 from poseidon.config import RECOMMENDED_MODELS, Settings
 from poseidon.context.checkpoints import WorkspaceCheckpointManager
 from poseidon.context.compactor import compact_messages
+from poseidon.context.custom_commands import CustomCommandStore
 from poseidon.context.memory import load_project_memory, starter_poseidon_md
+from poseidon.context.mentions import expand_file_mentions
+from poseidon.context.secrets_store import ProviderSecretsStore
 from poseidon.context.sessions import SessionStore, generate_session_id
+from poseidon.context.user_settings import (
+    UserSettingsStore,
+    add_mcp_server,
+    list_mcp_configs,
+    remove_mcp_server,
+)
 from poseidon.core.agent import AgentRunResult, ToolEvent, build_system_prompt, run_agent_loop
 from poseidon.core.benchmark_challenge import (
     ChallengeRunRow,
@@ -37,6 +49,8 @@ from poseidon.core.benchmark_m7 import (
     run_model_comparison,
 )
 from poseidon.core.diff_edit import DiffEditResult, run_diff_edit_request
+from poseidon.core.doctor import run_doctor_checks
+from poseidon.core.goal import GoalIterationRecord, parse_goal_command, run_goal_loop
 from poseidon.core.single_file import FileExtractionError, SingleFileResult, run_single_file_request
 from poseidon.indexing.semantic_index import FastEmbedProvider, SemanticCodeIndex
 from poseidon.llm.openrouter import (
@@ -44,6 +58,7 @@ from poseidon.llm.openrouter import (
     OpenRouterClient,
     OpenRouterError,
     TokenUsage,
+    discover_local_models,
 )
 from poseidon.mcp.client import MCPClientManager
 from poseidon.observability.respan import PoseidonTracer
@@ -304,13 +319,15 @@ def _run_agent_with_ui(
     conversation_history: list[dict[str, Any]] | None = None,
     tracer: PoseidonTracer | None = None,
     plan_mode: bool = False,
+    enable_web_tools: bool = True,
+    sandbox_image: str | None = None,
 ) -> AgentRunResult:
     """Execute the native tool-calling agent with live progress, diff preview, and Docker tests."""
     registry = ToolRegistry()
     hooks = HookManager()
     state = tool_state if tool_state is not None else ToolSessionState()
     test_runner = DockerTestRunner(
-        image=settings.sandbox_image,
+        image=sandbox_image or settings.sandbox_image,
         timeout_seconds=test_timeout,
     )
     semantic_index = SemanticCodeIndex(
@@ -333,6 +350,9 @@ def _run_agent_with_ui(
         hooks=hooks,
         protect_tests=True,
         read_only=plan_mode,
+        enable_web_tools=enable_web_tools,
+        tavily_api_key=settings.tavily_api_key.get_secret_value(),
+        brave_api_key=settings.brave_api_key.get_secret_value(),
     )
 
     plugin_report = load_workspace_plugins(workspace=workspace, registry=registry, hooks=hooks)
@@ -549,10 +569,35 @@ def root_callback(
         bool,
         typer.Option("--yes", "-y", help="Auto-approve diff patches without prompting."),
     ] = False,
+    print_prompt: Annotated[
+        str | None,
+        typer.Option(
+            "--print",
+            "-p",
+            help="Run a single headless prompt (supports piped stdin) and exit.",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit structured JSON output in --print headless mode."),
+    ] = False,
 ) -> None:
-    """Launch Poseidon-CLI interactively on the current project when run with no subcommand."""
+    """Launch Poseidon-CLI interactively, or run a single headless prompt with `-p`."""
     if ctx.invoked_subcommand is not None:
         return
+
+    if print_prompt is not None:
+        _run_headless_print(
+            workspace=workspace,
+            prompt=print_prompt,
+            model=model,
+            plan=plan,
+            max_calls=max_calls,
+            yes=yes,
+            json_output=json_output,
+        )
+        return
+
     _start_interactive_session(
         workspace=workspace,
         model=model,
@@ -565,6 +610,85 @@ def root_callback(
         resume=resume,
         prompt_for_model=False,
     )
+
+
+@app.command()
+def doctor(
+    workspace: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Workspace folder to inspect."),
+    ] = Path("."),
+) -> None:
+    """Run a 1-second health check (Docker, sandbox image, ripgrep, git, API keys, Local AI)."""
+    guard = WorkspaceGuard(workspace)
+    checks = run_doctor_checks(workspace_root=guard.root, settings=Settings())
+    tbl = Table(title="Poseidon Doctor — Environment & Provider Health", border_style="cyan")
+    tbl.add_column("Check", style="bold cyan")
+    tbl.add_column("Status", style="white")
+    tbl.add_column("Details", style="white")
+    for c in checks:
+        color = (
+            "green"
+            if c.ok
+            else ("yellow" if c.status in {"OFFLINE", "NONE", "WARN"} else "red")
+        )
+        tbl.add_row(c.name, f"[{color}]{c.status}[/{color}]", c.detail)
+    console.print(tbl)
+
+
+def _run_headless_print(
+    *,
+    workspace: Path,
+    prompt: str,
+    model: str | None,
+    plan: bool,
+    max_calls: int | None,
+    yes: bool,
+    json_output: bool,
+) -> None:
+    """Execute one non-interactive headless prompt (supporting piped stdin + `--json`)."""
+    settings = Settings()
+    guard = WorkspaceGuard(workspace)
+    user_cfg = UserSettingsStore(guard.root).load()
+    chosen_model = model or user_cfg.default_model or settings.default_model
+    call_limit = max_calls if max_calls is not None else user_cfg.max_calls
+
+    full_prompt = prompt.strip()
+    if not sys.stdin.isatty():
+        piped = sys.stdin.read().strip()
+        if piped:
+            full_prompt = f"{full_prompt}\n\n---\nPiped stdin input:\n```\n{piped[:12000]}\n```"
+
+    tool_state = ToolSessionState()
+    mention = expand_file_mentions(full_prompt, guard, tool_state)
+    full_prompt = mention.expanded_prompt
+
+    secrets_store = ProviderSecretsStore()
+    with OpenRouterClient(
+        settings,
+        ollama_base_url=user_cfg.ollama_base_url or settings.ollama_base_url,
+        lmstudio_base_url=user_cfg.lmstudio_base_url or settings.lmstudio_base_url,
+        secrets_store=secrets_store,
+    ) as client:
+        res = _run_agent_with_ui(
+            client=client,
+            workspace=guard,
+            settings=settings,
+            model=chosen_model,
+            prompt=full_prompt,
+            max_calls=call_limit,
+            test_timeout=user_cfg.test_timeout,
+            auto_approve=yes,
+            tool_state=tool_state,
+            plan_mode=plan,
+            enable_web_tools=user_cfg.web_tools_enabled,
+            sandbox_image=user_cfg.sandbox_image or settings.sandbox_image,
+        )
+
+    if json_output:
+        print(json.dumps(res.model_dump(), indent=2))
+    else:
+        print(res.final_response.strip())
 
 
 @app.command()
@@ -1216,6 +1340,80 @@ def benchmark_challenge(
 
 
 @app.command()
+def ui(
+    workspace: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Project workspace folder for the Web UI."),
+    ] = Path("."),
+    host: Annotated[
+        str,
+        typer.Option("--host", help="Bind host address (use 0.0.0.0 inside Docker)."),
+    ] = "0.0.0.0",
+    port: Annotated[
+        int,
+        typer.Option("--port", "-p", help="Local port to serve the Poseidon Web UI."),
+    ] = 2701,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", "-m", help="Initial OpenRouter model ID."),
+    ] = None,
+    plan: Annotated[
+        bool,
+        typer.Option("--plan", help="Start Web UI in read-only Plan Mode."),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Start Web UI with Auto-Edit enabled."),
+    ] = False,
+    resume: Annotated[
+        str | None,
+        typer.Option("--resume", help="Resume a saved JSONL session ID on startup."),
+    ] = None,
+    keep_alive: Annotated[
+        bool,
+        typer.Option(
+            "--keep-alive",
+            help="Keep server running after all browser tabs close (default auto-closes in 8s).",
+        ),
+    ] = False,
+) -> None:
+    """Launch the minimalist Abyssal-Ocean Web GUI on http://localhost:2701."""
+    import uvicorn
+
+    from poseidon.web.server import create_web_app
+
+    settings = Settings()
+    chosen_model = model or settings.default_model
+    guard = WorkspaceGuard(workspace)
+    memory = load_project_memory(guard.root)
+
+    render_banner(
+        console,
+        model=chosen_model,
+        workspace=guard.root,
+        plan_mode=plan,
+        memory_sources=memory.sources,
+    )
+    auto_note = "keep-alive" if keep_alive else "auto-closes 8s after last tab closes"
+    console.print(
+        f"[bold cyan]Poseidon Web UI running at:[/bold cyan] "
+        f"[bold green]http://localhost:{port}[/bold green]  "
+        f"[dim]({auto_note} | Ctrl+C to stop)[/dim]\n"
+    )
+
+    web_app = create_web_app(
+        workspace=guard.root,
+        settings=settings,
+        model=chosen_model,
+        plan_mode=plan,
+        auto_approve=yes,
+        resume_session_id=resume,
+        auto_shutdown_seconds=None if keep_alive else 8.0,
+    )
+    uvicorn.run(web_app, host=host, port=port, log_level="warning")
+
+
+@app.command()
 def chat(
     workspace: Annotated[
         Path,
@@ -1295,24 +1493,30 @@ def _start_interactive_session(
 ) -> None:
     """Shared interactive REPL used by both bare `poseidon` and `poseidon chat`."""
     settings = Settings()
-    call_limit = max_calls if max_calls is not None else settings.default_max_calls
-    effective_timeout = test_timeout if test_timeout is not None else settings.default_test_timeout
-    auto_approve = yes
-    plan_mode = plan
-
     try:
         guard = WorkspaceGuard(workspace)
     except WorkspaceSecurityError as exc:
         console.print(f"[bold red]Workspace error:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
 
+    user_settings_store = UserSettingsStore(guard.root)
+    user_cfg = user_settings_store.load()
+    call_limit = max_calls if max_calls is not None else user_cfg.max_calls
+    effective_timeout = test_timeout if test_timeout is not None else user_cfg.test_timeout
+    sandbox_image = user_cfg.sandbox_image or settings.sandbox_image
+    web_tools_enabled = user_cfg.web_tools_enabled
+    goal_max_iterations = user_cfg.goal_max_iterations
+    auto_approve = yes
+    plan_mode = plan
+
     session_store = SessionStore(guard.root)
     session_id = generate_session_id()
     history: list[dict[str, Any]] = []
+    default_effective_model = user_cfg.default_model or settings.default_model
     chosen_model = model or (
-        _select_model_interactive(settings.default_model)
+        _select_model_interactive(default_effective_model)
         if prompt_for_model
-        else settings.default_model
+        else default_effective_model
     )
 
     # Restore previous JSONL session if --resume or --continue was requested
@@ -1336,8 +1540,22 @@ def _start_interactive_session(
     tool_state = ToolSessionState()
     checkpoints = WorkspaceCheckpointManager(guard)
     tracer = PoseidonTracer(settings)
+    secrets_store = ProviderSecretsStore()
+    custom_commands = CustomCommandStore(guard.root)
+    sess_turns = 0
+    sess_prompt_tok = 0
+    sess_comp_tok = 0
+    sess_reason_tok = 0
+    sess_total_tok = 0
+    sess_cost_usd = 0.0
+    sess_masked_tok = 0
 
-    with OpenRouterClient(settings) as client:
+    with OpenRouterClient(
+        settings,
+        ollama_base_url=user_cfg.ollama_base_url or settings.ollama_base_url,
+        lmstudio_base_url=user_cfg.lmstudio_base_url or settings.lmstudio_base_url,
+        secrets_store=secrets_store,
+    ) as client:
         if mode == "agent":
             chosen_model = _validate_or_reselect_model(client, chosen_model, interactive=True)
 
@@ -1355,8 +1573,10 @@ def _start_interactive_session(
             f"Auto-edit: {auto_approve}[/dim]"
         )
         console.print(
-            "[dim]Commands: /plan, /compact, /undo, /checkpoints, /save, /resume, /sessions, "
-            "/memory, /init, /test, /model, /limit, /auto, /clear, /files, /exit[/dim]\n"
+            "[dim]Commands: /goal, /ui, /plan, /doctor, /cost, /cmd, /settings, /providers, "
+            "/local, /key, /mcp, /web, /search, /grep, /compact, /undo, /checkpoints, /save, "
+            "/resume, /sessions, /memory, /init, /tools, /test, /model, /limit, /auto, "
+            "/clear, /files, /exit[/dim]\n"
         )
 
         while True:
@@ -1384,6 +1604,69 @@ def _start_interactive_session(
                 continue
             if user_input == "/tools":
                 _render_tools_inventory(guard, settings, plan_mode=plan_mode)
+                continue
+            if user_input == "/ui" or user_input.startswith("/ui "):
+                from poseidon.web.launcher import (
+                    launch_sibling_ui_container,
+                    list_ui_containers,
+                    stop_ui_container,
+                )
+
+                ui_parts = user_input.split()
+                sub = ui_parts[1].lower() if len(ui_parts) > 1 else ""
+                if sub == "status":
+                    running = list_ui_containers()
+                    if not running:
+                        console.print("[dim]No Poseidon Web UI containers running.[/dim]")
+                    else:
+                        for item in running:
+                            console.print(
+                                f"  [green]●[/green] [cyan]{item.name}[/cyan] → "
+                                f"[bold]{item.url}[/bold]"
+                            )
+                    continue
+                if sub == "stop":
+                    stop_port = (
+                        int(ui_parts[2])
+                        if len(ui_parts) > 2 and ui_parts[2].isdigit()
+                        else 2701
+                    )
+                    if stop_ui_container(stop_port):
+                        console.print(
+                            f"[green]✓ Stopped Poseidon Web UI on port {stop_port}.[/green]"
+                        )
+                    else:
+                        console.print(
+                            f"[yellow]No running Poseidon Web UI on port {stop_port}.[/yellow]"
+                        )
+                    continue
+
+                target_port = int(sub) if sub.isdigit() else 2701
+                resume_id: str | None = None
+                if history:
+                    session_store.save(
+                        session_id=session_id,
+                        model=chosen_model,
+                        messages=history,
+                        plan_mode=plan_mode,
+                    )
+                    resume_id = session_id
+                try:
+                    info = launch_sibling_ui_container(
+                        port=target_port,
+                        model=chosen_model,
+                        plan_mode=plan_mode,
+                        auto_approve=auto_approve,
+                        resume_session_id=resume_id,
+                    )
+                    verb = "already running" if info.already_running else "launched"
+                    console.print(
+                        f"[bold green]✓ Poseidon Web UI {verb}:[/bold green] "
+                        f"[bold cyan]{info.url}[/bold cyan]  "
+                        f"[dim](auto-closes 8s after tab closes, or run `/ui stop`)[/dim]"
+                    )
+                except RuntimeError as exc:
+                    console.print(f"[bold red]Web UI launch failed:[/bold red] {exc}")
                 continue
             if user_input == "/plan":
                 plan_mode = not plan_mode
@@ -1515,25 +1798,477 @@ def _start_interactive_session(
                 continue
             if user_input == "/test":
                 runner = DockerTestRunner(
-                    image=settings.sandbox_image,
+                    image=sandbox_image,
                     timeout_seconds=effective_timeout,
                 )
                 res = runner.run(guard.root)
                 _render_test_result(res)
                 continue
-            if user_input == "/model":
-                selected = _select_model_interactive(chosen_model)
-                chosen_model = (
-                    _validate_or_reselect_model(client, selected, interactive=True)
-                    if mode == "agent"
-                    else selected
+            if user_input == "/settings":
+                user_cfg = user_settings_store.load()
+                tbl = Table(
+                    title="Workspace Settings (.poseidon/settings.json)",
+                    border_style="cyan",
                 )
+                tbl.add_column("Setting", style="cyan")
+                tbl.add_column("Value", style="white")
+                tbl.add_row("Active Model", chosen_model)
+                tbl.add_row("Custom Models", ", ".join(user_cfg.custom_models) or "(none)")
+                tbl.add_row("Execution Mode", mode)
+                tbl.add_row("Plan Mode", "ON" if plan_mode else "OFF")
+                tbl.add_row("Auto-Approve", "ON" if auto_approve else "OFF")
+                tbl.add_row("Max Calls / Turn", str(call_limit))
+                tbl.add_row("Test Timeout", f"{effective_timeout}s")
+                tbl.add_row("Sandbox Image", sandbox_image)
+                tbl.add_row("Web Search & Fetch", "ON" if web_tools_enabled else "OFF")
+                tbl.add_row("Goal Max Iterations", str(goal_max_iterations))
+                tbl.add_row("MCP Servers", str(len(list_mcp_configs(guard.root))))
+                console.print(tbl)
+                continue
+            if user_input == "/doctor":
+                checks = run_doctor_checks(
+                    workspace_root=guard.root,
+                    settings=settings,
+                    secrets_store=secrets_store,
+                )
+                dtbl = Table(title="Poseidon Doctor", border_style="cyan")
+                dtbl.add_column("Check", style="bold cyan")
+                dtbl.add_column("Status")
+                dtbl.add_column("Details")
+                for c in checks:
+                    col = (
+                        "green"
+                        if c.ok
+                        else ("yellow" if c.status in {"OFFLINE", "NONE", "WARN"} else "red")
+                    )
+                    dtbl.add_row(c.name, f"[{col}]{c.status}[/{col}]", c.detail)
+                console.print(dtbl)
+                continue
+            if user_input == "/cost":
+                ctbl = Table(title="Session Token & Cost Telemetry", border_style="cyan")
+                ctbl.add_column("Metric", style="cyan")
+                ctbl.add_column("Session Total", justify="right")
+                ctbl.add_row("Completed Turns", str(sess_turns))
+                ctbl.add_row("Prompt Tokens", f"{sess_prompt_tok:,}")
+                ctbl.add_row("Completion Tokens", f"{sess_comp_tok:,}")
+                ctbl.add_row("Reasoning Tokens", f"{sess_reason_tok:,}")
+                ctbl.add_row("Total Tokens", f"{sess_total_tok:,}")
+                ctbl.add_row("Tokens Masked", f"~{sess_masked_tok:,}")
+                ctbl.add_row("Total Cost (USD)", f"${sess_cost_usd:.6f}")
+                console.print(ctbl)
+                continue
+            if user_input == "/cmd" or user_input.startswith("/cmd "):
+                raw_c = user_input[4:].strip()
+                cparts = raw_c.split()
+                if not cparts or cparts[0].lower() == "list":
+                    saved_cmds = custom_commands.list_commands()
+                    if not saved_cmds:
+                        console.print(
+                            "[dim]No custom commands yet. Run "
+                            "`/cmd add --global <name> <prompt template>`[/dim]"
+                        )
+                    else:
+                        tbl_c = Table(title="Custom Slash Commands", border_style="cyan")
+                        tbl_c.add_column("Command", style="green")
+                        tbl_c.add_column("Scope", style="cyan")
+                        tbl_c.add_column("Description")
+                        for sc in saved_cmds:
+                            tbl_c.add_row(sc.slash_name, sc.scope, sc.description)
+                        console.print(tbl_c)
+                    continue
+                if cparts[0].lower() == "add" and len(cparts) >= 3:
+                    scope = "global"
+                    idx = 1
+                    if cparts[idx].lower() in {"--global", "--workspace"}:
+                        scope = cparts[idx][2:].lower()
+                        idx += 1
+                    if len(cparts) > idx + 1:
+                        try:
+                            sc = custom_commands.save(
+                                name=cparts[idx],
+                                template=" ".join(cparts[idx + 1 :]),
+                                scope=scope,
+                            )
+                            console.print(
+                                f"[green]✓ Saved custom command[/green] "
+                                f"[cyan]{sc.slash_name}[/cyan] ({sc.scope})"
+                            )
+                        except ValueError as exc:
+                            console.print(f"[red]{exc}[/red]")
+                    else:
+                        console.print(
+                            "[yellow]Usage: /cmd add [--global|--workspace] <name> <template>"
+                            "[/yellow]"
+                        )
+                    continue
+                if cparts[0].lower() == "remove" and len(cparts) >= 2:
+                    scope = "global"
+                    idx = 1
+                    if cparts[idx].lower() in {"--global", "--workspace"}:
+                        scope = cparts[idx][2:].lower()
+                        idx += 1
+                    if idx < len(cparts) and custom_commands.delete(
+                        name=cparts[idx], scope=scope
+                    ):
+                        rm_name = cparts[idx].lstrip("/")
+                        console.print(f"[green]✓ Removed /{rm_name} ({scope}).[/green]")
+                    else:
+                        console.print("[yellow]Custom command not found.[/yellow]")
+                    continue
+                console.print(
+                    "[yellow]Usage: /cmd list | "
+                    "/cmd add [--global|--workspace] <name> <template> | "
+                    "/cmd remove [--global|--workspace] <name>[/yellow]"
+                )
+                continue
+            if user_input == "/providers":
+                cur_cfg = user_settings_store.load()
+                kstat = secrets_store.masked_status(settings)
+                linfo = discover_local_models(
+                    ollama_base_url=cur_cfg.ollama_base_url or settings.ollama_base_url,
+                    lmstudio_base_url=cur_cfg.lmstudio_base_url or settings.lmstudio_base_url,
+                )
+                ptbl = Table(title="AI Providers & Local AI Status", border_style="cyan")
+                ptbl.add_column("Provider", style="cyan")
+                ptbl.add_column("Status", style="white")
+                ptbl.add_column("Key / Endpoint", style="dim")
+                for info in kstat.values():
+                    st = (
+                        f"[green]configured ({info['source']})[/green]"
+                        if info["configured"]
+                        else "[dim]not set[/dim]"
+                    )
+                    ptbl.add_row(info["label"], st, info["hint"] or info["env_var"])
+                for pname, label in (
+                    ("ollama", "Ollama (Local)"),
+                    ("lmstudio", "LM Studio (Local)"),
+                ):
+                    li = linfo[pname]
+                    st = (
+                        f"[green]online ({len(li['models'])} models)[/green]"
+                        if li["reachable"]
+                        else "[dim]offline[/dim]"
+                    )
+                    ptbl.add_row(label, st, li["base_url"])
+                console.print(ptbl)
+                continue
+            if user_input == "/local":
+                cur_cfg = user_settings_store.load()
+                linfo = discover_local_models(
+                    ollama_base_url=cur_cfg.ollama_base_url or settings.ollama_base_url,
+                    lmstudio_base_url=cur_cfg.lmstudio_base_url or settings.lmstudio_base_url,
+                )
+                found_local = [
+                    (mid, pname)
+                    for pname in ("ollama", "lmstudio")
+                    for mid in linfo[pname]["models"]
+                ]
+                if not found_local:
+                    console.print(
+                        "[yellow]No running Ollama or LM Studio models detected on host.[/yellow]"
+                    )
+                else:
+                    ltbl = Table(title="Detected Local AI Models", border_style="cyan")
+                    ltbl.add_column("Model Slug (use with /model)", style="green")
+                    ltbl.add_column("Runtime", style="cyan")
+                    for mid, pname in found_local:
+                        ltbl.add_row(mid, pname)
+                    console.print(ltbl)
+                continue
+            if user_input == "/key" or user_input.startswith("/key "):
+                kparts = user_input.split()
+                if len(kparts) != 3 or kparts[2].lower() not in {"set", "clear"}:
+                    console.print(
+                        "[yellow]Usage: /key <openrouter|anthropic|gemini|openai> "
+                        "<set|clear>[/yellow]"
+                    )
+                    continue
+                prov_name, action = kparts[1].lower(), kparts[2].lower()
+                try:
+                    if action == "clear":
+                        removed_k = secrets_store.clear_key(prov_name)
+                        msg_k = (
+                            f"[green]✓ Cleared saved key for {prov_name}.[/green]"
+                            if removed_k
+                            else f"[dim]No saved key found for {prov_name}.[/dim]"
+                        )
+                        console.print(msg_k)
+                    else:
+                        secret_val = Prompt.ask(
+                            f"Enter {prov_name} API key (hidden)",
+                            password=True,
+                        ).strip()
+                        secrets_store.set_key(prov_name, secret_val)
+                        console.print(
+                            f"[green]✓ Saved {prov_name} API key securely outside workspace."
+                            "[/green]"
+                        )
+                except ValueError as exc:
+                    console.print(f"[red]{exc}[/red]")
+                continue
+            if user_input == "/web" or user_input.startswith("/web "):
+                wparts = user_input.split()
+                if len(wparts) == 1:
+                    web_tools_enabled = not web_tools_enabled
+                elif len(wparts) == 2 and wparts[1].lower() in {"on", "off"}:
+                    web_tools_enabled = wparts[1].lower() == "on"
+                else:
+                    console.print("[yellow]Usage: /web [on|off][/yellow]")
+                    continue
+                cur = user_settings_store.load()
+                cur.web_tools_enabled = web_tools_enabled
+                user_settings_store.save(cur)
+                console.print(
+                    f"[green]Web tools (web_search & fetch_url):[/green] "
+                    f"{'ON' if web_tools_enabled else 'OFF'}"
+                )
+                continue
+            if user_input == "/mcp" or user_input.startswith("/mcp "):
+                raw_mcp = user_input[4:].strip()
+                if not raw_mcp:
+                    cfgs = list_mcp_configs(guard.root)
+                    if not cfgs:
+                        console.print(
+                            "[dim]No MCP servers configured. Use `/mcp add <name> <cmd> [args]`."
+                            "[/dim]"
+                        )
+                    else:
+                        tbl = Table(title="Configured MCP Servers", border_style="cyan")
+                        tbl.add_column("Name", style="cyan")
+                        tbl.add_column("Command", style="white")
+                        for sname, sentry in cfgs.items():
+                            cmdline = (
+                                f"{sentry.get('command', '')} "
+                                f"{' '.join(sentry.get('args', []))}"
+                            ).strip()
+                            tbl.add_row(sname, cmdline)
+                        console.print(tbl)
+                    continue
+                try:
+                    mtokens = shlex.split(raw_mcp)
+                except ValueError as exc:
+                    console.print(f"[red]Invalid arguments:[/red] {exc}")
+                    continue
+                if mtokens[0].lower() == "add" and len(mtokens) >= 3:
+                    try:
+                        add_mcp_server(
+                            guard.root,
+                            name=mtokens[1],
+                            command=mtokens[2],
+                            args=mtokens[3:],
+                        )
+                        console.print(
+                            f"[green]✓ Added MCP server[/green] [cyan]{mtokens[1]}[/cyan]."
+                        )
+                    except ValueError as exc:
+                        console.print(f"[red]{exc}[/red]")
+                elif mtokens[0].lower() == "remove" and len(mtokens) == 2:
+                    ok_rm, _ = remove_mcp_server(guard.root, mtokens[1])
+                    if ok_rm:
+                        console.print(f"[green]✓ Removed MCP server {mtokens[1]}.[/green]")
+                    else:
+                        console.print(f"[yellow]MCP server not found: {mtokens[1]}[/yellow]")
+                else:
+                    console.print(
+                        "[yellow]Usage: /mcp | /mcp add <name> <cmd> [args...] | "
+                        "/mcp remove <name>[/yellow]"
+                    )
+                continue
+            if user_input.startswith("/search "):
+                squery = user_input[8:].strip()
+                if squery:
+                    sidx = SemanticCodeIndex(
+                        guard,
+                        FastEmbedProvider(
+                            model_name=settings.embedding_model,
+                            cache_dir=settings.embedding_cache_dir,
+                        ),
+                    )
+                    sres = sidx.search(squery, top_k=5, auto_sync=True)
+                    for hit in sres.hits:
+                        console.print(
+                            f"  [yellow]{hit.path}:{hit.start_line}-{hit.end_line}[/yellow] "
+                            f"[green]{hit.symbol}[/green] [dim]({hit.score:.3f})[/dim]"
+                        )
+                continue
+            if user_input.startswith("/grep "):
+                from poseidon.search.lexical import search_workspace_text
+
+                gquery = user_input[6:].strip()
+                if gquery:
+                    gres = search_workspace_text(workspace=guard, query=gquery, max_results=20)
+                    for hit in gres.hits:
+                        console.print(
+                            f"  [yellow]{hit.path}:{hit.line_number}[/yellow] "
+                            f"{hit.line_text.strip()[:100]}"
+                        )
+                continue
+            if user_input == "/goal" or user_input.startswith("/goal "):
+                if plan_mode:
+                    console.print(
+                        "[yellow]Plan Mode is ON (read-only). Run `/plan` to disable before "
+                        "starting `/goal`.[/yellow]"
+                    )
+                    continue
+                try:
+                    objective, steps = parse_goal_command(
+                        user_input[5:].strip(),
+                        default_steps=goal_max_iterations,
+                    )
+                except ValueError as exc:
+                    console.print(f"[yellow]{exc}[/yellow]")
+                    continue
+
+                goal_runner = DockerTestRunner(
+                    image=sandbox_image,
+                    timeout_seconds=effective_timeout,
+                )
+                goal_index = SemanticCodeIndex(
+                    guard,
+                    FastEmbedProvider(
+                        model_name=settings.embedding_model,
+                        cache_dir=settings.embedding_cache_dir,
+                    ),
+                )
+                goal_hooks = HookManager()
+                ro_reg = ToolRegistry()
+                rw_reg = ToolRegistry()
+                def _goal_confirm_cli(d: str, _auto: bool = auto_approve) -> bool:
+                    return _preview_diff(d, auto_approve=_auto)
+
+                for reg, is_ro in ((ro_reg, True), (rw_reg, False)):
+                    register_core_tools(
+                        registry=reg,
+                        workspace=guard,
+                        state=tool_state,
+                        confirm_patch=_goal_confirm_cli,
+                        test_runner=goal_runner,
+                        on_test_result=_render_test_result,
+                        semantic_index=goal_index,
+                        checkpoints=checkpoints,
+                        hooks=goal_hooks,
+                        protect_tests=True,
+                        read_only=is_ro,
+                        enable_web_tools=web_tools_enabled,
+                        tavily_api_key=settings.tavily_api_key.get_secret_value(),
+                        brave_api_key=settings.brave_api_key.get_secret_value(),
+                    )
+                    load_workspace_plugins(workspace=guard, registry=reg, hooks=goal_hooks)
+                goal_mcp = MCPClientManager()
+                goal_mcp.connect_and_register(workspace_root=guard.root, registry=rw_reg)
+                mem = load_project_memory(guard.root)
+
+                def _cli_on_plan(plan_text: str) -> None:
+                    console.print(
+                        Panel(
+                            Markdown(plan_text),
+                            title="[bold cyan]Goal Plan (Read-Only Pass)[/bold cyan]",
+                            border_style="cyan",
+                        )
+                    )
+
+                def _cli_on_iter_start(i: int, total: int) -> None:
+                    console.print(
+                        f"\n[bold cyan]━━━ Goal Iteration {i}/{total} ━━━[/bold cyan]"
+                    )
+
+                def _cli_on_iter_done(rec: GoalIterationRecord) -> None:
+                    badge = "[green]COMPLETE[/green]" if rec.status_signal == "COMPLETE" else (
+                        f"[yellow]{rec.status_signal}[/yellow]"
+                    )
+                    console.print(
+                        f"[dim]Iteration {rec.iteration} finished ({rec.calls_made} calls, "
+                        f"{rec.elapsed_seconds:.1f}s) →[/dim] {badge}"
+                    )
+
+                def _cli_on_call(c: int, lim: int, _model: str = chosen_model) -> None:
+                    console.print(f"[dim]→ Model call {c}/{lim} ({_model})...[/dim]")
+
+                def _cli_on_tool(ev: ToolEvent) -> None:
+                    icon = "[green]✓[/green]" if ev.ok else "[red]✗[/red]"
+                    console.print(f"  {icon} [bold cyan]{ev.tool_name}[/bold cyan] → {ev.summary}")
+
+                try:
+                    gres = run_goal_loop(
+                        client=client,
+                        read_only_registry=ro_reg,
+                        write_registry=rw_reg,
+                        model=chosen_model,
+                        objective=objective,
+                        max_iterations=steps,
+                        max_calls_per_iteration=call_limit,
+                        project_memory=mem.content,
+                        tracer=tracer,
+                        conversation_history=history,
+                        workspace_root=guard.root,
+                        tool_state=tool_state,
+                        test_runner=goal_runner,
+                        on_plan_ready=_cli_on_plan,
+                        on_iteration_start=_cli_on_iter_start,
+                        on_iteration_complete=_cli_on_iter_done,
+                        on_model_call=_cli_on_call,
+                        on_tool_result=_cli_on_tool,
+                        on_test_result=_render_test_result,
+                    )
+                    session_store.save(
+                        session_id=session_id,
+                        model=chosen_model,
+                        messages=history,
+                        plan_mode=plan_mode,
+                    )
+                    border = "green" if gres.completed else "yellow"
+                    title = "Goal Achieved" if gres.completed else "Goal Stopped"
+                    console.print(
+                        Panel(
+                            Markdown(gres.final_summary or gres.stop_reason),
+                            title=f"[bold {border}]{title} ({gres.stop_reason})[/bold {border}]",
+                            border_style=border,
+                        )
+                    )
+                except KeyboardInterrupt:
+                    console.print("\n[yellow]Goal interrupted by user.[/yellow]")
+                except (OpenRouterError, WorkspaceSecurityError, ValueError) as exc:
+                    console.print(f"[bold red]Goal error:[/bold red] {exc}")
+                finally:
+                    goal_mcp.close()
+                continue
+            if user_input == "/model" or user_input.startswith("/model "):
+                mparts = user_input.split(maxsplit=2)
+                if len(mparts) == 1:
+                    selected = _select_model_interactive(chosen_model)
+                    chosen_model = (
+                        _validate_or_reselect_model(client, selected, interactive=True)
+                        if mode == "agent"
+                        else selected
+                    )
+                elif mparts[1].lower() == "add" and len(mparts) == 3:
+                    try:
+                        user_settings_store.add_custom_model(mparts[2])
+                        chosen_model = mparts[2].strip()
+                        console.print(
+                            f"[green]✓ Added & activated custom model:[/green] {chosen_model}"
+                        )
+                    except ValueError as exc:
+                        console.print(f"[red]{exc}[/red]")
+                        continue
+                elif mparts[1].lower() == "remove" and len(mparts) == 3:
+                    user_settings_store.remove_custom_model(mparts[2])
+                    console.print(f"[green]✓ Removed custom model:[/green] {mparts[2]}")
+                    continue
+                else:
+                    chosen_model = user_input[7:].strip()
+                cur = user_settings_store.load()
+                cur.default_model = chosen_model
+                user_settings_store.save(cur)
                 console.print(f"[green]Active model switched to:[/green] {chosen_model}")
                 continue
             if user_input.startswith("/limit"):
                 parts = user_input.split()
                 if len(parts) == 2 and parts[1].isdigit() and int(parts[1]) >= 1:
-                    call_limit = int(parts[1])
+                    call_limit = max(1, min(int(parts[1]), 30))
+                    cur = user_settings_store.load()
+                    cur.max_calls = call_limit
+                    user_settings_store.save(cur)
                     console.print(f"[green]Model-call limit set to:[/green] {call_limit}")
                 else:
                     console.print("[yellow]Usage: /limit <positive_integer>[/yellow]")
@@ -1541,7 +2276,10 @@ def _start_interactive_session(
             if user_input.startswith("/timeout"):
                 parts = user_input.split()
                 if len(parts) == 2 and parts[1].isdigit() and int(parts[1]) >= 1:
-                    effective_timeout = int(parts[1])
+                    effective_timeout = max(1, min(int(parts[1]), 300))
+                    cur = user_settings_store.load()
+                    cur.test_timeout = effective_timeout
+                    user_settings_store.save(cur)
                     console.print(f"[green]Test timeout set to:[/green] {effective_timeout}s")
                 else:
                     console.print("[yellow]Usage: /timeout <seconds>[/yellow]")
@@ -1563,6 +2301,23 @@ def _start_interactive_session(
                     console.print("[yellow]Usage: /mode <agent|diff|whole>[/yellow]")
                 continue
 
+            if user_input.startswith("/"):
+                rendered_custom = custom_commands.render(user_input)
+                if rendered_custom is not None:
+                    cc, expanded_prompt = rendered_custom
+                    console.print(
+                        f"[cyan]↳ Running custom command[/cyan] "
+                        f"[bold]{cc.slash_name}[/bold] ({cc.scope})"
+                    )
+                    user_input = expanded_prompt
+
+            mention_exp = expand_file_mentions(user_input, guard, tool_state)
+            if mention_exp.loaded_files:
+                console.print(
+                    f"[dim]📎 Attached @file context: {', '.join(mention_exp.loaded_files)}[/dim]"
+                )
+                user_input = mention_exp.expanded_prompt
+
             try:
                 if mode == "agent":
                     agent_res = _run_agent_with_ui(
@@ -1579,7 +2334,16 @@ def _start_interactive_session(
                         conversation_history=history,
                         tracer=tracer,
                         plan_mode=plan_mode,
+                        enable_web_tools=web_tools_enabled,
+                        sandbox_image=sandbox_image,
                     )
+                    sess_turns += 1
+                    sess_prompt_tok += agent_res.usage.prompt_tokens or 0
+                    sess_comp_tok += agent_res.usage.completion_tokens or 0
+                    sess_reason_tok += agent_res.usage.reasoning_tokens or 0
+                    sess_total_tok += agent_res.usage.total_tokens or 0
+                    sess_cost_usd += agent_res.usage.cost_usd or 0.0
+                    sess_masked_tok += agent_res.estimated_tokens_saved or 0
                     _render_agent_result(agent_res)
                     # Auto-save session cleanly after every completed turn
                     session_store.save(

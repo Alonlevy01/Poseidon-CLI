@@ -1,7 +1,8 @@
-"""Direct OpenRouter HTTP client with native tool calling and usage metrics."""
+"""Direct multi-provider LLM client (OpenRouter, Anthropic, Gemini, OpenAI, Ollama, LM Studio)."""
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -9,14 +10,29 @@ import httpx
 from pydantic import BaseModel, Field
 
 from poseidon.config import Settings
+from poseidon.context.secrets_store import ProviderSecretsStore
+
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_VERSION = "2023-06-01"
+
+DIRECT_PROVIDER_PRESETS: list[tuple[str, str]] = [
+    ("anthropic:claude-sonnet-4-5", "Anthropic Claude Sonnet 4.5 (requires ANTHROPIC_API_KEY)"),
+    ("anthropic:claude-haiku-4-5", "Anthropic Claude Haiku 4.5 (fast, requires ANTHROPIC_API_KEY)"),
+    ("gemini:gemini-2.5-pro", "Google Gemini 2.5 Pro (requires GEMINI_API_KEY)"),
+    ("gemini:gemini-2.5-flash", "Google Gemini 2.5 Flash (fast, requires GEMINI_API_KEY)"),
+    ("openai:gpt-4.1", "OpenAI GPT-4.1 (requires OPENAI_API_KEY)"),
+    ("openai:gpt-4.1-mini", "OpenAI GPT-4.1 Mini (fast, requires OPENAI_API_KEY)"),
+]
 
 
 class OpenRouterError(RuntimeError):
-    """Raised when an OpenRouter API request fails."""
+    """Raised when an LLM provider API request fails."""
 
 
 class MissingApiKeyError(OpenRouterError):
-    """Raised when OPENROUTER_API_KEY is not configured."""
+    """Raised when the required provider API key is not configured."""
 
 
 class ModelToolSupportError(OpenRouterError):
@@ -32,7 +48,7 @@ class ToolCall(BaseModel):
 
 
 class TokenUsage(BaseModel):
-    """Token and cost metadata returned by OpenRouter."""
+    """Token and cost metadata returned by the provider."""
 
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
@@ -52,7 +68,7 @@ class ChatResponse(BaseModel):
     finish_reason: str | None = None
 
     def to_assistant_message(self) -> dict[str, Any]:
-        """Build the OpenRouter/OpenAI-compliant assistant message for conversation history."""
+        """Build the OpenAI-compliant assistant message for conversation history."""
         msg: dict[str, Any] = {
             "role": "assistant",
             "content": self.content if self.content else None,
@@ -72,10 +88,79 @@ class ChatResponse(BaseModel):
         return msg
 
 
-class OpenRouterClient:
-    """Direct REST client for the OpenRouter Chat Completions API."""
+def parse_provider_model(model_id: str) -> tuple[str, str]:
+    """Parse provider prefix (`ollama:`, `lmstudio:`, `openai:`, `gemini:`, `anthropic:`)."""
+    cleaned = model_id.strip()
+    for prefix in ("ollama:", "lmstudio:", "openai:", "gemini:", "anthropic:"):
+        if cleaned.lower().startswith(prefix):
+            provider = prefix[:-1]
+            target = cleaned[len(prefix) :].strip()
+            return provider, target
+    return "openrouter", cleaned
 
-    def __init__(self, settings: Settings, http_client: httpx.Client | None = None) -> None:
+
+def discover_local_models(
+    *,
+    ollama_base_url: str = "http://host.docker.internal:11434/v1",
+    lmstudio_base_url: str = "http://host.docker.internal:1234/v1",
+    timeout_seconds: float = 2.5,
+) -> dict[str, dict[str, Any]]:
+    """Probe local Ollama and LM Studio servers for currently available models."""
+    out: dict[str, dict[str, Any]] = {}
+    targets = (
+        ("ollama", ollama_base_url.rstrip("/")),
+        ("lmstudio", lmstudio_base_url.rstrip("/")),
+    )
+    for provider, base_url in targets:
+        models: list[str] = []
+        reachable = False
+        error: str | None = None
+        try:
+            with httpx.Client(timeout=timeout_seconds) as client:
+                resp = client.get(f"{base_url}/models")
+                if resp.status_code == 200:
+                    reachable = True
+                    payload = resp.json()
+                    for item in payload.get("data", []):
+                        mid = str(item.get("id") or "").strip()
+                        if mid:
+                            models.append(f"{provider}:{mid}")
+                elif provider == "ollama":
+                    # Fallback to Ollama native /api/tags endpoint
+                    root = base_url[:-3] if base_url.endswith("/v1") else base_url
+                    r2 = client.get(f"{root}/api/tags")
+                    if r2.status_code == 200:
+                        reachable = True
+                        for item in r2.json().get("models", []):
+                            name = str(item.get("name") or "").strip()
+                            if name:
+                                models.append(f"ollama:{name}")
+                else:
+                    error = f"HTTP {resp.status_code}"
+        except httpx.HTTPError as exc:
+            error = str(exc)
+
+        out[provider] = {
+            "base_url": base_url,
+            "reachable": reachable,
+            "models": sorted(set(models)),
+            "error": error,
+        }
+    return out
+
+
+class OpenRouterClient:
+    """Direct REST client for OpenRouter, Anthropic Claude, Gemini, OpenAI, Ollama & LM Studio."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        http_client: httpx.Client | None = None,
+        *,
+        ollama_base_url: str | None = None,
+        lmstudio_base_url: str | None = None,
+        secrets_store: ProviderSecretsStore | None = None,
+    ) -> None:
         self._settings = settings
         self._client = http_client or httpx.Client(
             base_url=settings.openrouter_base_url.rstrip("/"),
@@ -83,6 +168,9 @@ class OpenRouterClient:
         )
         self._owns_client = http_client is None
         self._models_catalog: dict[str, dict[str, Any]] | None = None
+        self._ollama_base_url = (ollama_base_url or settings.ollama_base_url).rstrip("/")
+        self._lmstudio_base_url = (lmstudio_base_url or settings.lmstudio_base_url).rstrip("/")
+        self._secrets = secrets_store or ProviderSecretsStore()
 
     def fetch_models_catalog(self) -> dict[str, dict[str, Any]]:
         """Fetch and cache the public OpenRouter models catalog (zero API spend)."""
@@ -103,7 +191,23 @@ class OpenRouterClient:
         return self._models_catalog
 
     def validate_tool_model(self, model_id: str) -> dict[str, Any]:
-        """Verify that model_id exists on OpenRouter and supports native tool calling."""
+        """Verify that model_id is configured and supports native tool calling."""
+        provider, target_model = parse_provider_model(model_id)
+        if not target_model:
+            raise ModelToolSupportError(f"Invalid empty model ID: '{model_id}'.")
+
+        if provider in {"ollama", "lmstudio"}:
+            return {"id": model_id, "provider": provider, "local": True}
+
+        if provider in {"openai", "gemini", "anthropic"}:
+            key = self._secrets.resolve_key(provider, self._settings)
+            if not key:
+                raise MissingApiKeyError(
+                    f"API key for '{provider}' is not set. Add it in Settings -> Providers "
+                    f"or via `/key {provider} set`."
+                )
+            return {"id": model_id, "provider": provider, "local": False}
+
         catalog = self.fetch_models_catalog()
         info = catalog.get(model_id)
         if info is None:
@@ -138,11 +242,34 @@ class OpenRouterClient:
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | None = None,
     ) -> ChatResponse:
-        """Send a chat completion request directly to OpenRouter."""
-        api_key = self._settings.openrouter_api_key.get_secret_value().strip()
+        """Route a chat completion to OpenRouter, Claude, Gemini, GPT, Ollama, or LM Studio."""
+        provider, target_model = parse_provider_model(model)
+
+        if provider == "anthropic":
+            return self._anthropic_completion(
+                full_model=model,
+                target_model=target_model,
+                messages=messages,
+                temperature=temperature,
+                tools=tools,
+            )
+
+        if provider in {"ollama", "lmstudio", "openai", "gemini"}:
+            return self._openai_compatible_completion(
+                provider=provider,
+                full_model=model,
+                target_model=target_model,
+                messages=messages,
+                temperature=temperature,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+
+        # Default: OpenRouter
+        api_key = self._secrets.resolve_key("openrouter", self._settings)
         if not api_key:
             raise MissingApiKeyError(
-                "OPENROUTER_API_KEY is not set. Add it to your environment or .env file."
+                "OPENROUTER_API_KEY is not set. Add it in Settings -> Providers or your .env file."
             )
 
         headers = {
@@ -152,7 +279,7 @@ class OpenRouterClient:
             "X-Title": self._settings.app_title,
         }
         payload: dict[str, Any] = {
-            "model": model,
+            "model": target_model,
             "messages": messages,
             "temperature": temperature,
         }
@@ -166,54 +293,291 @@ class OpenRouterClient:
         except httpx.HTTPError as exc:
             raise OpenRouterError(f"Network error contacting OpenRouter: {exc}") from exc
         elapsed = time.perf_counter() - started
+        return _parse_openai_response(
+            response=response,
+            provider_label="OpenRouter",
+            requested_model=model,
+            tools=tools,
+            elapsed=elapsed,
+        )
+
+    def _openai_compatible_completion(
+        self,
+        *,
+        provider: str,
+        full_model: str,
+        target_model: str,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        tools: list[dict[str, Any]] | None,
+        tool_choice: str | None,
+    ) -> ChatResponse:
+        if provider == "ollama":
+            base_url = self._ollama_base_url
+            api_key = "ollama"
+            label = "Ollama"
+        elif provider == "lmstudio":
+            base_url = self._lmstudio_base_url
+            api_key = "lm-studio"
+            label = "LM Studio"
+        elif provider == "openai":
+            base_url = OPENAI_BASE_URL
+            api_key = self._secrets.resolve_key("openai", self._settings)
+            label = "OpenAI"
+        else:
+            base_url = GEMINI_OPENAI_BASE_URL
+            api_key = self._secrets.resolve_key("gemini", self._settings)
+            label = "Google Gemini"
+
+        if provider in {"openai", "gemini"} and not api_key:
+            raise MissingApiKeyError(
+                f"{label} API key is not set. Add it in Settings -> Providers "
+                f"or `/key {provider} set`."
+            )
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: dict[str, Any] = {
+            "model": target_model,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice or "auto"
+
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        started = time.perf_counter()
+        try:
+            with httpx.Client(timeout=self._settings.request_timeout_seconds) as client:
+                response = client.post(url, headers=headers, json=payload)
+        except httpx.HTTPError as exc:
+            hint = (
+                " Is your local server running with network access enabled?"
+                if provider in {"ollama", "lmstudio"}
+                else ""
+            )
+            raise OpenRouterError(
+                f"Network error contacting {label} ({base_url}): {exc}{hint}"
+            ) from exc
+        elapsed = time.perf_counter() - started
+        return _parse_openai_response(
+            response=response,
+            provider_label=label,
+            requested_model=full_model,
+            tools=tools,
+            elapsed=elapsed,
+            is_local=provider in {"ollama", "lmstudio"},
+        )
+
+    def _anthropic_completion(
+        self,
+        *,
+        full_model: str,
+        target_model: str,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        tools: list[dict[str, Any]] | None,
+    ) -> ChatResponse:
+        api_key = self._secrets.resolve_key("anthropic", self._settings)
+        if not api_key:
+            raise MissingApiKeyError(
+                "Anthropic API key is not set. Add it in Settings -> Providers "
+                "or via `/key anthropic set`."
+            )
+
+        system_parts, anthropic_msgs = _convert_messages_to_anthropic(messages)
+        payload: dict[str, Any] = {
+            "model": target_model,
+            "max_tokens": 4096,
+            "temperature": temperature,
+            "messages": anthropic_msgs,
+        }
+        if system_parts:
+            payload["system"] = "\n\n".join(system_parts)
+        if tools:
+            payload["tools"] = _convert_tools_to_anthropic(tools)
+
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": ANTHROPIC_VERSION,
+            "content-type": "application/json",
+        }
+        started = time.perf_counter()
+        try:
+            with httpx.Client(timeout=self._settings.request_timeout_seconds) as client:
+                response = client.post(ANTHROPIC_MESSAGES_URL, headers=headers, json=payload)
+        except httpx.HTTPError as exc:
+            raise OpenRouterError(f"Network error contacting Anthropic: {exc}") from exc
+        elapsed = time.perf_counter() - started
 
         if response.status_code >= 400:
             detail = _extract_error_detail(response)
-            lower_detail = detail.lower()
-            if tools and (
-                "tool" in lower_detail
-                or "function" in lower_detail
-                or response.status_code == 404
-            ):
-                raise ModelToolSupportError(
-                    f"Model '{model}' is unavailable or does not support tool calling "
-                    f"(HTTP {response.status_code}): {detail}"
-                )
             raise OpenRouterError(
-                f"OpenRouter request failed (HTTP {response.status_code}): {detail}"
+                f"Anthropic request failed (HTTP {response.status_code}): {detail}"
             )
 
         data = response.json()
-        choices = data.get("choices") or []
-        if not choices:
-            raise OpenRouterError("OpenRouter returned no completion choices.")
+        text_chunks: list[str] = []
+        parsed_tool_calls: list[ToolCall] = []
+        for block in data.get("content", []):
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "text":
+                text_chunks.append(str(block.get("text") or ""))
+            elif btype == "tool_use":
+                parsed_tool_calls.append(
+                    ToolCall(
+                        id=str(block.get("id") or f"call_{len(parsed_tool_calls)}"),
+                        name=str(block.get("name") or ""),
+                        arguments=json.dumps(block.get("input") or {}),
+                    )
+                )
 
-        message = choices[0].get("message") or {}
-        content = message.get("content") or ""
-        finish_reason = choices[0].get("finish_reason")
-        parsed_tool_calls = _parse_tool_calls(message.get("tool_calls"))
         raw_usage = data.get("usage") or {}
-
-        usage = TokenUsage(
-            prompt_tokens=raw_usage.get("prompt_tokens"),
-            completion_tokens=raw_usage.get("completion_tokens"),
-            reasoning_tokens=_extract_reasoning_tokens(raw_usage),
-            total_tokens=raw_usage.get("total_tokens"),
-            cost_usd=raw_usage.get("cost"),
-        )
-
+        in_tok = raw_usage.get("input_tokens")
+        out_tok = raw_usage.get("output_tokens")
+        total_tok = (in_tok + out_tok) if (in_tok is not None and out_tok is not None) else None
         return ChatResponse(
-            model=data.get("model") or model,
-            content=content,
+            model=full_model,
+            content="\n".join(text_chunks).strip(),
             tool_calls=parsed_tool_calls,
-            usage=usage,
+            usage=TokenUsage(
+                prompt_tokens=in_tok,
+                completion_tokens=out_tok,
+                total_tokens=total_tok,
+                cost_usd=None,
+            ),
             elapsed_seconds=elapsed,
-            finish_reason=finish_reason,
+            finish_reason=data.get("stop_reason"),
         )
+
+
+def _convert_tools_to_anthropic(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    converted: list[dict[str, Any]] = []
+    for item in tools:
+        fn = item.get("function") or {}
+        name = str(fn.get("name") or "").strip()
+        if not name:
+            continue
+        converted.append(
+            {
+                "name": name,
+                "description": str(fn.get("description") or ""),
+                "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
+            }
+        )
+    return converted
+
+
+def _convert_messages_to_anthropic(
+    messages: list[dict[str, Any]],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    system_parts: list[str] = []
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        role = msg.get("role")
+        if role == "system":
+            text = str(msg.get("content") or "").strip()
+            if text:
+                system_parts.append(text)
+            continue
+        if role == "user":
+            out.append({"role": "user", "content": str(msg.get("content") or "")})
+            continue
+        if role == "assistant":
+            blocks: list[dict[str, Any]] = []
+            text = str(msg.get("content") or "").strip()
+            if text:
+                blocks.append({"type": "text", "text": text})
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                raw_args = fn.get("arguments") or "{}"
+                try:
+                    parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except json.JSONDecodeError:
+                    parsed_args = {}
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": str(tc.get("id") or "call_0"),
+                        "name": str(fn.get("name") or ""),
+                        "input": parsed_args if isinstance(parsed_args, dict) else {},
+                    }
+                )
+            if blocks:
+                out.append({"role": "assistant", "content": blocks})
+            continue
+        if role == "tool":
+            tool_block = {
+                "type": "tool_result",
+                "tool_use_id": str(msg.get("tool_call_id") or "call_0"),
+                "content": str(msg.get("content") or ""),
+            }
+            if out and out[-1].get("role") == "user" and isinstance(out[-1].get("content"), list):
+                out[-1]["content"].append(tool_block)
+            else:
+                out.append({"role": "user", "content": [tool_block]})
+    return system_parts, out
+
+
+def _parse_openai_response(
+    *,
+    response: httpx.Response,
+    provider_label: str,
+    requested_model: str,
+    tools: list[dict[str, Any]] | None,
+    elapsed: float,
+    is_local: bool = False,
+) -> ChatResponse:
+    if response.status_code >= 400:
+        detail = _extract_error_detail(response)
+        lower_detail = detail.lower()
+        if tools and (
+            "tool" in lower_detail or "function" in lower_detail or response.status_code == 404
+        ):
+            raise ModelToolSupportError(
+                f"Model '{requested_model}' is unavailable or does not support tool calling "
+                f"(HTTP {response.status_code}): {detail}"
+            )
+        raise OpenRouterError(
+            f"{provider_label} request failed (HTTP {response.status_code}): {detail}"
+        )
+
+    data = response.json()
+    choices = data.get("choices") or []
+    if not choices:
+        raise OpenRouterError(f"{provider_label} returned no completion choices.")
+
+    message = choices[0].get("message") or {}
+    content = message.get("content") or ""
+    finish_reason = choices[0].get("finish_reason")
+    parsed_tool_calls = _parse_tool_calls(message.get("tool_calls"))
+    raw_usage = data.get("usage") or {}
+
+    usage = TokenUsage(
+        prompt_tokens=raw_usage.get("prompt_tokens"),
+        completion_tokens=raw_usage.get("completion_tokens"),
+        reasoning_tokens=_extract_reasoning_tokens(raw_usage),
+        total_tokens=raw_usage.get("total_tokens"),
+        cost_usd=0.0 if is_local else raw_usage.get("cost"),
+    )
+
+    return ChatResponse(
+        model=requested_model if is_local else (data.get("model") or requested_model),
+        content=content,
+        tool_calls=parsed_tool_calls,
+        usage=usage,
+        elapsed_seconds=elapsed,
+        finish_reason=finish_reason,
+    )
 
 
 def _parse_tool_calls(raw_calls: Any) -> list[ToolCall]:
-    """Normalize OpenRouter tool_calls entries into typed ToolCall models."""
+    """Normalize OpenAI/OpenRouter tool_calls entries into typed ToolCall models."""
     if not isinstance(raw_calls, list):
         return []
     parsed: list[ToolCall] = []
@@ -227,13 +591,13 @@ def _parse_tool_calls(raw_calls: Any) -> list[ToolCall]:
         call_id = str(item.get("id") or f"call_{idx}")
         arguments = fn.get("arguments")
         if not isinstance(arguments, str):
-            arguments = "{}" if arguments is None else str(arguments)
+            arguments = "{}" if arguments is None else json.dumps(arguments)
         parsed.append(ToolCall(id=call_id, name=name, arguments=arguments))
     return parsed
 
 
 def _extract_reasoning_tokens(raw_usage: dict[str, Any]) -> int | None:
-    """Extract hidden reasoning tokens when reported by OpenRouter."""
+    """Extract hidden reasoning tokens when reported by the provider."""
     details = raw_usage.get("completion_tokens_details")
     if isinstance(details, dict) and details.get("reasoning_tokens") is not None:
         return int(details["reasoning_tokens"])
@@ -243,7 +607,7 @@ def _extract_reasoning_tokens(raw_usage: dict[str, Any]) -> int | None:
 
 
 def _extract_error_detail(response: httpx.Response) -> str:
-    """Safely extract an error message from an OpenRouter error payload."""
+    """Safely extract an error message from a provider error payload."""
     try:
         body = response.json()
         err = body.get("error")

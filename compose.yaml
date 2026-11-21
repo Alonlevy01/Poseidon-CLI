@@ -9,6 +9,10 @@ services:
         required: false
     group_add:
       - "0"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "2701:2701"
     volumes:
       - ./demo_workspace:/workspace
       - ./tests:/app/tests:ro
@@ -16,9 +20,34 @@ services:
       - ./benchmarks:/app/benchmarks:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - poseidon_model_cache:/home/poseidon/.cache/fastembed
+      - poseidon_secrets:/home/poseidon/.poseidon_secrets
     stdin_open: true
     tty: true
     working_dir: /workspace
+
+  poseidon-ui:
+    image: poseidon-cli:dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    group_add:
+      - "0"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "2701:2701"
+    volumes:
+      - ./demo_workspace:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+      - poseidon_model_cache:/home/poseidon/.cache/fastembed
+      - poseidon_secrets:/home/poseidon/.poseidon_secrets
+    working_dir: /workspace
+    command: ["ui", "--workspace", "/workspace", "--host", "0.0.0.0", "--port", "2701"]
+    profiles:
+      - ui
 
   poseidon-sandbox:
     build:
@@ -30,3 +59,4 @@ services:
 
 volumes:
   poseidon_model_cache:
+  poseidon_secrets:

@@ -68,6 +68,10 @@ def register_core_tools(
     protect_tests: bool = True,
     read_only: bool = False,
     enable_preflight: bool = True,
+    enable_web_tools: bool = True,
+    enable_git_tools: bool = True,
+    tavily_api_key: str = "",
+    brave_api_key: str = "",
 ) -> None:
     """Register all built-in workspace tools strictly sandboxed to the workspace."""
 
@@ -623,4 +627,18 @@ def register_core_tools(
                 },
                 handler=handle_semantic_search,
             )
+        )
+
+    if enable_git_tools:
+        from poseidon.tools.git_tools import register_git_tools
+
+        register_git_tools(registry, workspace)
+
+    if enable_web_tools:
+        from poseidon.tools.web_tools import register_web_tools
+
+        register_web_tools(
+            registry,
+            tavily_api_key=tavily_api_key,
+            brave_api_key=brave_api_key,
         )

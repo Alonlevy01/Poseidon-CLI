@@ -8,9 +8,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install ripgrep for fast, structured code search (Milestone 5+)
+# Install ripgrep (lexical search) and git (read-only repo inspection tools)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ripgrep \
+    && apt-get install -y --no-install-recommends ripgrep git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for fast, deterministic lockfile installs
@@ -26,9 +26,10 @@ COPY src/ ./src/
 # Install package and dev tools into system environment
 RUN uv pip install --system --no-cache ".[dev]"
 
-# Prepare workspace mount point, sandbox dir, and model cache dir owned by non-root user
-RUN mkdir -p /workspace /sandbox /home/poseidon/.cache/fastembed \
-    && chown -R poseidon:poseidon /app /workspace /sandbox /home/poseidon/.cache
+# Prepare workspace mount point, sandbox dir, secrets dir, and model cache dir owned by non-root user
+RUN mkdir -p /workspace /sandbox /home/poseidon/.cache/fastembed /home/poseidon/.poseidon_secrets \
+    && chmod 700 /home/poseidon/.poseidon_secrets \
+    && chown -R poseidon:poseidon /app /workspace /sandbox /home/poseidon/.cache /home/poseidon/.poseidon_secrets
 
 USER poseidon
 

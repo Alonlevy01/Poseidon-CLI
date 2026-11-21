@@ -19,6 +19,7 @@ dependencies = [
     "respan-tracing>=2.25.0",
     "rich>=13.9.0",
     "typer>=0.15.0",
+    "websockets>=14.0",
 ]
 
 [project.optional-dependencies]

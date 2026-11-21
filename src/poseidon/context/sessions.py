@@ -154,6 +154,14 @@ class SessionStore:
         sessions = self.list_sessions()
         return sessions[0].session_id if sessions else None
 
+    def delete(self, session_id: str) -> bool:
+        """Safely delete a saved JSONL session by ID. Returns True if removed."""
+        path = self._path_for(session_id)
+        if not path.is_file():
+            return False
+        path.unlink()
+        return True
+
     @staticmethod
     def _read_meta(path: Path) -> SessionSummary | None:
         try:

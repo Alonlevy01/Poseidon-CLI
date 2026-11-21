@@ -1,0 +1,2456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>POSEIDON — Coding Agent Workbench</title>
+  <style>
+    :root {
+      --bg-abyss: #040d16;
+      --bg-deep: #071726;
+      --bg-panel: rgba(8, 23, 38, 0.84);
+      --bg-card: rgba(10, 28, 46, 0.82);
+      --bg-card-hover: rgba(14, 38, 62, 0.94);
+      --bg-input: rgba(5, 16, 27, 0.95);
+      --border-cyan: rgba(56, 232, 255, 0.20);
+      --border-strong: rgba(56, 232, 255, 0.52);
+      --cyan: #38e8ff;
+      --cyan-mid: #22d3ee;
+      --cyan-deep: #0284c7;
+      --cyan-soft: #a5f3fc;
+      --emerald: #10b981;
+      --coral: #f43f5e;
+      --amethyst: #c084fc;
+      --gold: #f5c542;
+      --text-main: #e8f7fc;
+      --text-muted: #88acc0;
+      --text-dim: #527488;
+      --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-display: "Cinzel", "Trajan Pro", "Palatino Linotype", Georgia, serif;
+      --font-mono: "Cascadia Code", "JetBrains Mono", "Fira Code", Consolas, monospace;
+      --radius: 12px;
+      --glow-sm: 0 0 14px rgba(56, 232, 255, 0.14);
+      --glow-md: 0 0 28px rgba(56, 232, 255, 0.16);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(56, 232, 255, 0.55) rgba(5, 16, 27, 0.45);
+    }
+
+    /* Prettier Abyssal-Cyan Scrollbars (Chromium / Edge / Safari) */
+    ::-webkit-scrollbar {
+      width: 7px;
+      height: 7px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(4, 13, 22, 0.55);
+      border-radius: 999px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, rgba(56, 232, 255, 0.72), rgba(2, 132, 199, 0.78));
+      border-radius: 999px;
+      border: 1px solid rgba(56, 232, 255, 0.28);
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(180deg, #67e8f9, #0ea5e9);
+      box-shadow: 0 0 8px rgba(56, 232, 255, 0.55);
+    }
+    ::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      color: var(--text-main);
+      background:
+        radial-gradient(ellipse 75% 42% at 50% -8%, rgba(56, 232, 255, 0.15), transparent 68%),
+        radial-gradient(ellipse 50% 45% at 85% 95%, rgba(2, 132, 199, 0.10), transparent 70%),
+        linear-gradient(180deg, var(--bg-abyss) 0%, var(--bg-deep) 100%);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Top Header Bar + Greek Meander Accent ─────────────────────────────── */
+    .topbar-wrap {
+      position: relative;
+      flex-shrink: 0;
+      background: rgba(4, 13, 22, 0.94);
+      backdrop-filter: blur(14px);
+      z-index: 20;
+    }
+    .topbar {
+      height: 58px;
+      padding: 0 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .meander-bar {
+      height: 7px;
+      width: 100%;
+      border-top: 1px solid rgba(56, 232, 255, 0.16);
+      border-bottom: 1px solid rgba(56, 232, 255, 0.24);
+      background-color: rgba(6, 20, 34, 0.9);
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='7' viewBox='0 0 24 7'%3E%3Cpath d='M0 6h6V1h12v4H9V3h6' fill='none' stroke='%2338e8ff' stroke-opacity='0.22' stroke-width='1'/%3E%3C/svg%3E");
+      background-repeat: repeat-x;
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      user-select: none;
+    }
+    .brand-trident {
+      width: 30px;
+      height: 36px;
+      flex-shrink: 0;
+      filter: drop-shadow(0 0 8px rgba(56, 232, 255, 0.58));
+    }
+    .brand-wordmark {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: 20px;
+      letter-spacing: 3.4px;
+      background: linear-gradient(180deg, #ecfeff 0%, #67e8f9 48%, #0ea5e9 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      filter: drop-shadow(0 0 12px rgba(56, 232, 255, 0.45));
+      line-height: 1;
+    }
+
+    .cli-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 11px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: #c7eef8;
+      background: rgba(10, 30, 48, 0.86);
+      border: 1px solid rgba(56, 232, 255, 0.25);
+      white-space: nowrap;
+    }
+    .cli-pill .prompt-glyph { color: var(--cyan); font-weight: 700; }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--emerald);
+      box-shadow: 0 0 9px var(--emerald);
+    }
+    .cli-pill.offline { border-color: rgba(244, 63, 94, 0.45); color: #fecdd3; }
+    .cli-pill.offline .status-dot { background: var(--coral); box-shadow: 0 0 9px var(--coral); }
+
+    .folder-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 8px;
+      font-size: 11.5px;
+      font-family: var(--font-mono);
+      color: var(--cyan-soft);
+      background: rgba(56, 232, 255, 0.07);
+      border: 1px solid rgba(56, 232, 255, 0.20);
+      max-width: 240px;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: nowrap;
+    }
+
+    select, .btn {
+      font-family: var(--font-sans);
+      font-size: 12.5px;
+      border-radius: 8px;
+      border: 1px solid var(--border-cyan);
+      background: var(--bg-card);
+      color: var(--text-main);
+      padding: 6px 11px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s, box-shadow 0.15s, color 0.15s;
+      white-space: nowrap;
+    }
+    select option {
+      background: #071726;
+      color: #e8f7fc;
+    }
+    select:hover, .btn:hover {
+      border-color: var(--border-strong);
+      background: var(--bg-card-hover);
+      box-shadow: var(--glow-sm);
+    }
+    .btn:disabled { opacity: 0.42; cursor: not-allowed; box-shadow: none; }
+    .btn-primary {
+      background: linear-gradient(135deg, rgba(56, 232, 255, 0.24), rgba(2, 132, 199, 0.46));
+      border-color: rgba(56, 232, 255, 0.60);
+      color: #f0fdff;
+      font-weight: 600;
+    }
+    .btn-primary:hover { box-shadow: 0 0 18px rgba(56, 232, 255, 0.30); }
+    .btn-plan.active {
+      background: rgba(192, 132, 252, 0.18);
+      border-color: rgba(192, 132, 252, 0.68);
+      color: #f3e8ff;
+      box-shadow: 0 0 14px rgba(192, 132, 252, 0.22);
+    }
+    .btn-auto.active {
+      background: rgba(16, 185, 129, 0.18);
+      border-color: rgba(16, 185, 129, 0.68);
+      color: #d1fae5;
+      box-shadow: 0 0 14px rgba(16, 185, 129, 0.22);
+    }
+    .btn-approve {
+      background: rgba(16, 185, 129, 0.20);
+      border-color: rgba(16, 185, 129, 0.72);
+      color: #a7f3d0;
+      font-weight: 600;
+    }
+    .btn-reject {
+      background: rgba(244, 63, 94, 0.16);
+      border-color: rgba(244, 63, 94, 0.62);
+      color: #fecdd3;
+      font-weight: 600;
+    }
+    .btn-reject:hover {
+      background: rgba(244, 63, 94, 0.28);
+      border-color: rgba(244, 63, 94, 0.85);
+      box-shadow: 0 0 14px rgba(244, 63, 94, 0.24);
+    }
+    .btn-sm { padding: 5px 9px; font-size: 11.5px; }
+
+    /* ── Main 3-Column Layout: Left (Sessions) | Center (Chat) | Right (Files) ── */
+    .layout {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 264px 1fr 248px;
+      min-height: 0;
+    }
+
+    .sidebar {
+      background: rgba(5, 15, 25, 0.84);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 14px 12px;
+      gap: 14px;
+    }
+    .sidebar-left { border-right: 1px solid var(--border-cyan); }
+    .sidebar-right { border-left: 1px solid var(--border-cyan); }
+
+    .side-box {
+      background: rgba(8, 22, 36, 0.62);
+      border: 1px solid rgba(56, 232, 255, 0.14);
+      border-radius: 10px;
+      padding: 10px 10px 8px;
+    }
+    .side-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 1.25px;
+      text-transform: uppercase;
+      color: var(--cyan-mid);
+      padding: 0 4px 7px;
+      border-bottom: 1px solid rgba(56, 232, 255, 0.12);
+      margin-bottom: 7px;
+    }
+    .side-count {
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+      font-weight: 600;
+    }
+    .side-list {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      overflow-y: auto;
+    }
+    .side-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 6px 8px;
+      border-radius: 7px;
+      font-size: 12px;
+      color: var(--text-muted);
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.12s;
+      text-align: left;
+      background: transparent;
+      width: 100%;
+    }
+    .side-item:hover {
+      background: rgba(56, 232, 255, 0.08);
+      border-color: rgba(56, 232, 255, 0.24);
+      color: var(--text-main);
+    }
+    .side-item.active {
+      background: rgba(56, 232, 255, 0.14);
+      border-color: rgba(56, 232, 255, 0.44);
+      color: var(--cyan-soft);
+    }
+
+    /* Saved session row with delete trash button */
+    .session-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .session-row .side-item {
+      flex: 1;
+      min-width: 0;
+    }
+    .trash-btn {
+      flex-shrink: 0;
+      width: 26px;
+      height: 26px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all 0.14s;
+    }
+    .trash-btn:hover {
+      color: #fda4af;
+      background: rgba(244, 63, 94, 0.16);
+      border-color: rgba(244, 63, 94, 0.48);
+    }
+
+    .mono { font-family: var(--font-mono); }
+    .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .metric-tile {
+      background: rgba(5, 16, 27, 0.8);
+      border: 1px solid rgba(56, 232, 255, 0.14);
+      border-radius: 8px;
+      padding: 6px 8px;
+    }
+    .metric-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+      color: var(--text-dim);
+    }
+    .metric-val {
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--cyan-soft);
+      margin-top: 2px;
+    }
+    .metric-val.gold { color: var(--gold); }
+    .metric-val.emerald { color: #6ee7b7; }
+    .quick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+    /* ── Center Main Stream ────────────────────────────────────────────────── */
+    .main {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stream {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 26px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 13px;
+      max-width: 940px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .welcome {
+      margin: auto;
+      text-align: center;
+      max-width: 580px;
+      padding: 18px 20px;
+    }
+    .welcome-emblem {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 88px;
+      height: 100px;
+      margin-bottom: 10px;
+    }
+    .welcome-emblem::before {
+      content: "";
+      position: absolute;
+      inset: -14px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(56, 232, 255, 0.24) 0%, rgba(2, 132, 199, 0.06) 52%, transparent 72%);
+      pointer-events: none;
+    }
+    .welcome-emblem svg {
+      width: 70px;
+      height: 90px;
+      position: relative;
+      filter: drop-shadow(0 0 18px rgba(56, 232, 255, 0.65));
+    }
+    .welcome h1 {
+      font-family: var(--font-display);
+      font-size: 23px;
+      font-weight: 700;
+      letter-spacing: 2.2px;
+      background: linear-gradient(180deg, #f0fdff 0%, #67e8f9 65%, #38bdf8 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .welcome p {
+      margin-top: 8px;
+      font-size: 13.5px;
+      line-height: 1.6;
+      color: var(--text-muted);
+    }
+    .quick-prompts {
+      margin-top: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px;
+    }
+    .quick-chip {
+      font-size: 12px;
+      padding: 7px 13px;
+      border-radius: 999px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-cyan);
+      color: var(--cyan-soft);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .quick-chip:hover {
+      border-color: var(--cyan);
+      background: var(--bg-card-hover);
+      box-shadow: var(--glow-sm);
+    }
+    .quick-chip.cmd {
+      font-family: var(--font-mono);
+      color: #a7f3d0;
+      border-color: rgba(16, 185, 129, 0.34);
+      background: rgba(16, 185, 129, 0.08);
+    }
+    .quick-chip.cmd:hover {
+      border-color: rgba(16, 185, 129, 0.72);
+      background: rgba(16, 185, 129, 0.16);
+    }
+
+    /* ── Cards ─────────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-cyan);
+      border-radius: var(--radius);
+      padding: 13px 16px;
+      box-shadow: var(--glow-md);
+      line-height: 1.58;
+      font-size: 13.5px;
+    }
+    .card.user {
+      align-self: flex-end;
+      max-width: 78%;
+      background: linear-gradient(135deg, rgba(14, 116, 144, 0.38), rgba(9, 27, 44, 0.94));
+      border-color: rgba(56, 232, 255, 0.44);
+    }
+    .card.cmd-card {
+      border-color: rgba(56, 232, 255, 0.34);
+      background: rgba(7, 21, 35, 0.90);
+    }
+    .card.error {
+      border-color: rgba(244, 63, 94, 0.58);
+      background: rgba(244, 63, 94, 0.10);
+      color: #fecdd3;
+    }
+    .card-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.95px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      margin-bottom: 7px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .step-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      padding: 7px 12px;
+      border-radius: 8px;
+      background: rgba(7, 20, 33, 0.78);
+      border: 1px solid rgba(56, 232, 255, 0.16);
+      color: var(--text-muted);
+    }
+    .step-row .badge-ok { color: var(--emerald); font-weight: 700; }
+    .step-row .badge-err { color: var(--coral); font-weight: 700; }
+    .step-row .tool-name { color: var(--cyan-soft); font-family: var(--font-mono); font-weight: 600; }
+
+    .cmd-table { width: 100%; border-collapse: collapse; font-size: 12.2px; margin-top: 8px; }
+    .cmd-table th {
+      text-align: left;
+      padding: 6px 9px;
+      border-bottom: 1px solid rgba(56, 232, 255, 0.25);
+      color: var(--cyan);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+    }
+    .cmd-table td {
+      padding: 6px 9px;
+      border-bottom: 1px solid rgba(56, 232, 255, 0.08);
+      color: var(--text-main);
+      vertical-align: top;
+    }
+    .cmd-table tr:last-child td { border-bottom: none; }
+    .cmd-table td:first-child { font-family: var(--font-mono); color: var(--cyan-soft); white-space: nowrap; }
+
+    .hit-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+    .hit-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      background: rgba(4, 13, 22, 0.85);
+      border: 1px solid rgba(56, 232, 255, 0.18);
+      cursor: pointer;
+      text-align: left;
+      color: var(--text-main);
+      width: 100%;
+    }
+    .hit-item:hover { border-color: var(--cyan); background: rgba(12, 34, 54, 0.9); }
+
+    .diff-card { border-color: rgba(56, 232, 255, 0.50); padding: 0; overflow: hidden; }
+    .diff-header {
+      padding: 10px 14px;
+      background: rgba(5, 16, 27, 0.94);
+      border-bottom: 1px solid var(--border-cyan);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .diff-pre {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.5;
+      padding: 10px 0;
+      overflow-x: auto;
+      max-height: 360px;
+      background: rgba(3, 10, 18, 0.96);
+    }
+    .diff-line { padding: 0 14px; white-space: pre; }
+    .diff-line.add { background: rgba(16, 185, 129, 0.16); color: #a7f3d0; }
+    .diff-line.del { background: rgba(244, 63, 94, 0.16); color: #fecdd3; }
+    .diff-line.hunk { background: rgba(56, 232, 255, 0.10); color: var(--cyan); }
+    .diff-actions { display: flex; gap: 8px; }
+
+    .test-card.pass { border-color: rgba(16, 185, 129, 0.58); }
+    .test-card.fail { border-color: rgba(244, 63, 94, 0.58); }
+    .test-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+    .pill-pass {
+      padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+      background: rgba(16, 185, 129, 0.18); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.52);
+    }
+    .pill-fail {
+      padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+      background: rgba(244, 63, 94, 0.18); color: #fda4af; border: 1px solid rgba(244, 63, 94, 0.52);
+    }
+    .pill-tag {
+      padding: 2px 7px; border-radius: 999px; font-size: 10.5px; font-family: var(--font-mono);
+      border: 1px solid rgba(56, 232, 255, 0.30); background: rgba(56, 232, 255, 0.10); color: var(--cyan-soft);
+    }
+    .pill-tag.write {
+      border-color: rgba(245, 197, 66, 0.42); background: rgba(245, 197, 66, 0.10); color: var(--gold);
+    }
+
+    .md p { margin-bottom: 8px; }
+    .md p:last-child { margin-bottom: 0; }
+    .md h2, .md h3 { color: var(--cyan-soft); margin: 10px 0 6px; font-size: 14.5px; }
+    .md ul { padding-left: 20px; margin: 6px 0 8px; }
+    .md li { margin-bottom: 4px; }
+    .md code {
+      font-family: var(--font-mono); font-size: 12px;
+      background: rgba(56, 232, 255, 0.11); padding: 1.5px 5px; border-radius: 4px; color: var(--cyan-soft);
+    }
+    .md pre {
+      margin: 8px 0; padding: 10px 12px; border-radius: 8px;
+      background: rgba(3, 10, 18, 0.95); border: 1px solid rgba(56, 232, 255, 0.18);
+      overflow-x: auto; font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
+    }
+    .md pre code { background: transparent; padding: 0; color: var(--text-main); }
+
+    .run-footer {
+      margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(56, 232, 255, 0.12);
+      display: flex; flex-wrap: wrap; gap: 12px; font-size: 11.5px; color: var(--text-dim); font-family: var(--font-mono);
+    }
+
+    /* ── Elevated Composer + Under-Bar Controls (Model Left | Mode+Plan+Auto Right) ── */
+    .composer-wrap {
+      padding: 10px 26px 22px;
+      max-width: 940px;
+      width: 100%;
+      margin: 0 auto;
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    .slash-menu {
+      position: absolute;
+      left: 26px;
+      right: 26px;
+      bottom: calc(100% - 2px);
+      background: rgba(6, 18, 31, 0.98);
+      border: 1px solid rgba(56, 232, 255, 0.45);
+      border-radius: 12px;
+      box-shadow: 0 -10px 32px rgba(0, 0, 0, 0.55), var(--glow-md);
+      max-height: 270px;
+      overflow-y: auto;
+      padding: 6px;
+      display: none;
+      z-index: 30;
+    }
+    .slash-menu.open { display: block; }
+    .slash-item {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 12.5px; border: 1px solid transparent;
+    }
+    .slash-item:hover, .slash-item.selected {
+      background: rgba(56, 232, 255, 0.14); border-color: rgba(56, 232, 255, 0.36);
+    }
+    .slash-usage { font-family: var(--font-mono); color: var(--cyan); font-weight: 600; white-space: nowrap; }
+    .slash-desc { color: var(--text-muted); font-size: 12px; }
+
+    .composer {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      background: var(--bg-input);
+      border: 1px solid var(--border-cyan);
+      border-radius: 14px;
+      padding: 10px 12px;
+      box-shadow: var(--glow-md);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .composer:focus-within {
+      border-color: var(--cyan);
+      box-shadow: 0 0 24px rgba(56, 232, 255, 0.18);
+    }
+    .composer textarea {
+      flex: 1;
+      resize: none;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.48;
+      max-height: 150px;
+      min-height: 24px;
+      padding: 3px 4px;
+    }
+    .composer textarea::placeholder { color: var(--text-dim); }
+
+    .composer-controls {
+      margin-top: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .controls-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .controls-left select {
+      max-width: 310px;
+      font-family: var(--font-mono);
+      font-size: 11.8px;
+      padding: 5px 10px;
+      color: var(--cyan-soft);
+    }
+    .controls-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .controls-right select {
+      font-size: 11.8px;
+      padding: 5px 9px;
+    }
+
+    .composer-hint {
+      margin-top: 7px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: var(--text-dim);
+      padding: 0 4px;
+      gap: 10px;
+    }
+
+    /* ── Slide-out Right Drawer (File Viewer & Tools Inspector) ────────────── */
+    .drawer {
+      position: fixed;
+      top: 65px;
+      right: 0;
+      bottom: 0;
+      width: min(600px, 92vw);
+      background: rgba(5, 16, 27, 0.98);
+      border-left: 1px solid var(--border-strong);
+      box-shadow: -14px 0 38px rgba(0, 0, 0, 0.55);
+      transform: translateX(100%);
+      transition: transform 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      z-index: 40;
+    }
+    .drawer.open { transform: translateX(0); }
+    .drawer-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-cyan);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .drawer-body {
+      flex: 1;
+      overflow: auto;
+      padding: 14px 16px;
+      font-family: var(--font-mono);
+      font-size: 12.2px;
+      line-height: 1.55;
+      color: var(--text-main);
+    }
+    .code-line { display: flex; gap: 14px; white-space: pre; }
+    .code-ln { color: var(--text-dim); user-select: none; min-width: 34px; text-align: right; }
+
+    /* ── Settings Tabs, Inputs & Goal Banner ───────────────────────────────── */
+    .settings-tabs {
+      display: flex;
+      gap: 6px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border-cyan);
+      background: rgba(4, 13, 22, 0.7);
+    }
+    .tab-btn {
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+    .tab-btn:hover { color: var(--text-main); background: rgba(56, 232, 255, 0.08); }
+    .tab-btn.active {
+      color: var(--cyan);
+      background: rgba(56, 232, 255, 0.14);
+      border-color: rgba(56, 232, 255, 0.42);
+    }
+    .form-group { margin-bottom: 12px; font-family: var(--font-sans); }
+    .form-label {
+      display: block; font-size: 11.5px; color: var(--text-muted);
+      margin-bottom: 5px; font-weight: 600; letter-spacing: 0.4px;
+    }
+    .form-input {
+      width: 100%;
+      padding: 7px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border-cyan);
+      background: rgba(4, 13, 22, 0.9);
+      color: var(--text-main);
+      font-family: var(--font-mono);
+      font-size: 12.2px;
+      outline: none;
+    }
+    .form-input:focus { border-color: var(--cyan); }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .check-row {
+      display: flex; align-items: center; gap: 8px; font-family: var(--font-sans);
+      font-size: 12.5px; color: var(--text-main); cursor: pointer;
+    }
+    .settings-card {
+      padding: 10px 12px;
+      border: 1px solid rgba(56, 232, 255, 0.18);
+      border-radius: 10px;
+      background: rgba(8, 22, 36, 0.72);
+      margin-bottom: 10px;
+      font-family: var(--font-sans);
+    }
+    .goal-banner {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 16px;
+      background: linear-gradient(90deg, rgba(16, 185, 129, 0.14), rgba(56, 232, 255, 0.14));
+      border-bottom: 1px solid rgba(56, 232, 255, 0.34);
+      font-size: 12.5px;
+    }
+    .goal-banner.active { display: flex; }
+
+    /* ── Confirmation Modal (Delete Saved Session) ─────────────────────────── */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 8, 15, 0.74);
+      backdrop-filter: blur(6px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 60;
+      padding: 20px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal-box {
+      width: 100%;
+      max-width: 420px;
+      background: rgba(8, 22, 36, 0.98);
+      border: 1px solid rgba(244, 63, 94, 0.48);
+      border-radius: 14px;
+      padding: 18px 20px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65), 0 0 28px rgba(244, 63, 94, 0.14);
+    }
+    .modal-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #fecdd3;
+      margin-bottom: 8px;
+    }
+    .modal-text {
+      font-size: 13px;
+      line-height: 1.55;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    /* ── Centered Settings Modal Window ────────────────────────────────────── */
+    .settings-modal-box {
+      width: min(780px, 94vw);
+      max-height: 85vh;
+      background: rgba(6, 18, 31, 0.98);
+      border: 1px solid var(--border-strong);
+      border-radius: 16px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.72), 0 0 36px rgba(56, 232, 255, 0.16);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .settings-modal-header {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border-cyan);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: rgba(4, 13, 22, 0.92);
+    }
+    .settings-modal-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 18px;
+    }
+
+    .spinner {
+      display: inline-block; width: 12px; height: 12px;
+      border: 2px solid rgba(56, 232, 255, 0.25); border-top-color: var(--cyan);
+      border-radius: 50%; animation: spin 0.75s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (max-width: 1020px) {
+      .layout { grid-template-columns: 240px 1fr; }
+      .sidebar-right { display: none; }
+    }
+    @media (max-width: 780px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar-left { display: none; }
+      .cli-pill, .folder-pill { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Reusable Cyber-Mythology Glowing Trident SVG -->
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <linearGradient id="tridentGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#f0fdff" />
+        <stop offset="38%" stop-color="#38e8ff" />
+        <stop offset="100%" stop-color="#0284c7" />
+      </linearGradient>
+      <linearGradient id="tridentCore" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#ffffff" />
+        <stop offset="100%" stop-color="#67e8f9" />
+      </linearGradient>
+      <symbol id="poseidon-trident" viewBox="0 0 64 80">
+        <path d="M32 3 L38 17 L34.5 15 L34.5 68 L32 76 L29.5 68 L29.5 15 L26 17 Z" fill="url(#tridentGrad)" />
+        <path d="M32 9 L33.2 21 L32 23 L30.8 21 Z" fill="url(#tridentCore)" opacity="0.92" />
+        <path d="M12 11 L19.5 21 L16 20.5 C16.5 31 20 37.5 29.5 39 L29.5 43.5 C16.8 42 11.2 33.5 11.5 19.5 L8 21 Z" fill="url(#tridentGrad)" />
+        <path d="M52 11 L56 21 L52.5 19.5 C52.8 33.5 47.2 42 34.5 43.5 L34.5 39 C44 37.5 47.5 31 48 20.5 L44.5 21 Z" fill="url(#tridentGrad)" />
+        <path d="M23 41.5 Q32 46.5 41 41.5 L39 45.5 Q32 49.5 25 45.5 Z" fill="url(#tridentCore)" opacity="0.9" />
+        <rect x="27" y="49" width="10" height="2.6" rx="1.3" fill="#a5f3fc" />
+        <rect x="28" y="54" width="8" height="2.2" rx="1.1" fill="#38e8ff" opacity="0.85" />
+      </symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24">
+        <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"
+              d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v13a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6h12zM10 11v6M14 11v6" />
+      </symbol>
+    </defs>
+  </svg>
+
+  <!-- 1. TOP HEADER BAR -->
+  <div class="topbar-wrap">
+    <header class="topbar">
+      <div class="brand-group">
+        <div class="brand" title="Poseidon-CLI Web Workbench">
+          <svg class="brand-trident" aria-hidden="true"><use href="#poseidon-trident" /></svg>
+          <span class="brand-wordmark">POSEIDON</span>
+        </div>
+        <span id="statusPill" class="cli-pill">
+          <span class="prompt-glyph">&gt;_</span>
+          <span id="statusText">Connecting</span>
+          <span class="status-dot"></span>
+        </span>
+        <span id="folderPill" class="folder-pill truncate" title="Active project folder">
+          <span style="color:var(--cyan);">dir:</span>
+          <span id="folderName" class="truncate">workspace</span>
+        </span>
+      </div>
+
+      <div class="toolbar">
+        <button id="toolsBtn" class="btn" title="Inspect active Built-in, Plugin, and MCP tools (/tools)">Tools</button>
+        <button id="testBtn" class="btn btn-primary" title="Run isolated Docker pytest suite (/test)">Run Tests</button>
+        <button id="shutdownBtn" class="btn btn-reject" title="Save session, stop Web UI, and close Docker container (/exit)">&#x23FB; Stop</button>
+      </div>
+    </header>
+    <div class="meander-bar" aria-hidden="true"></div>
+  </div>
+
+  <!-- 2. THREE-COLUMN WORKBENCH -->
+  <div class="layout">
+    <!-- 2A. LEFT SIDEBAR: Telemetry & Saved Sessions (with Delete Trash Icon) -->
+    <aside class="sidebar sidebar-left">
+      <section class="side-box">
+        <div class="side-header">
+          <span>Session Telemetry</span>
+          <span id="memoryBadge" class="side-count">mem: none</span>
+        </div>
+        <div class="metrics-grid">
+          <div class="metric-tile">
+            <div class="metric-label">Context</div>
+            <div id="ctxVal" class="metric-val">0 ch</div>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-label">Checkpoints</div>
+            <div id="cpVal" class="metric-val gold">0</div>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-label">Call Limit</div>
+            <div id="limitVal" class="metric-val">8</div>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-label">Test Timeout</div>
+            <div id="timeoutVal" class="metric-val emerald">15s</div>
+          </div>
+        </div>
+        <div class="quick-grid">
+          <button id="compactBtn" class="btn btn-sm" title="Observation masking (/compact)">Compact</button>
+          <button id="undoBtn" class="btn btn-sm" title="Restore latest checkpoint (/undo)">Undo</button>
+          <button id="saveBtn" class="btn btn-sm" title="Save JSONL session (/save)">Save</button>
+          <button id="newSessionBtn" class="btn btn-sm" title="Start fresh session (/clear)">New Chat</button>
+        </div>
+      </section>
+
+      <section class="side-box" style="flex:1; min-height: 150px; display:flex; flex-direction:column;">
+        <div class="side-header">
+          <span>Saved Sessions</span>
+          <span id="sessionCount" class="side-count">0</span>
+        </div>
+        <div id="sessionList" class="side-list" style="flex:1;"></div>
+      </section>
+
+      <button
+        id="settingsBtn"
+        class="btn"
+        style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;padding:9px 12px;font-weight:600;flex-shrink:0;"
+        title="Settings, Local AI (Ollama / LM Studio), Cloud API Keys &amp; MCP Servers"
+      >
+        <span style="color:var(--cyan);font-size:15px;">&#x2699;</span>
+        <span>Settings &amp; Providers</span>
+      </button>
+    </aside>
+
+    <!-- 2B. CENTER MAIN STREAM + ELEVATED COMPOSER -->
+    <main class="main">
+      <div id="goalBanner" class="goal-banner">
+        <div style="display:flex;align-items:center;gap:9px;min-width:0;">
+          <span class="spinner"></span>
+          <span id="goalBannerText" class="truncate" style="color:var(--cyan-soft);font-weight:600;">Goal active...</span>
+        </div>
+        <button id="cancelGoalBtn" class="btn btn-sm btn-reject">Cancel Goal</button>
+      </div>
+      <div id="stream" class="stream">
+        <div id="welcome" class="welcome">
+          <div class="welcome-emblem">
+            <svg aria-hidden="true"><use href="#poseidon-trident" /></svg>
+          </div>
+          <h1>POSEIDON WORKBENCH</h1>
+          <p>
+            Full terminal-parity coding agent mounted directly on your project folder — unified diffs,
+            AST preflight guard, local semantic search, isolated Docker tests, plugins, MCP, and every <code>/command</code>.
+          </p>
+          <div class="quick-prompts">
+            <button class="quick-chip cmd" data-prompt="/help">/help</button>
+            <button class="quick-chip cmd" data-prompt="/tools">/tools</button>
+            <button class="quick-chip cmd" data-prompt="/memory">/memory</button>
+            <button class="quick-chip cmd" data-prompt="/test">/test</button>
+            <button class="quick-chip" data-prompt="Explain how this workspace is structured using semantic search.">
+              Explore codebase
+            </button>
+            <button class="quick-chip" data-prompt="Run the test suite and summarize the results.">
+              Run &amp; summarize tests
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Elevated Composer + Under-Bar Controls -->
+      <div class="composer-wrap">
+        <div id="slashMenu" class="slash-menu" role="listbox" aria-label="Slash commands"></div>
+
+        <div class="composer">
+          <button id="slashToggleBtn" class="btn btn-sm mono" title="Browse all /commands" style="color:var(--cyan);">/</button>
+          <textarea
+            id="promptInput"
+            rows="1"
+            placeholder="Ask Poseidon to inspect, edit, or test — or type / for any terminal command..."
+          ></textarea>
+          <button id="sendBtn" class="btn btn-primary">Send</button>
+        </div>
+
+        <!-- Model selector on the LEFT | Mode + Plan + Auto on the RIGHT -->
+        <div class="composer-controls">
+          <div class="controls-left">
+            <select id="modelSelect" title="Active OpenRouter model (switch anytime mid-chat)"></select>
+          </div>
+          <div class="controls-right">
+            <select id="modeSelect" title="Execution mode (/mode agent|diff|whole)">
+              <option value="agent">Mode: Agent</option>
+              <option value="diff">Mode: Diff</option>
+              <option value="whole">Mode: Whole</option>
+            </select>
+            <button id="planBtn" class="btn btn-sm btn-plan" title="Toggle Read-Only Plan Mode (/plan)">Plan: OFF</button>
+            <button id="autoBtn" class="btn btn-sm btn-auto" title="Auto-approve unified diffs (/auto)">Auto: OFF</button>
+          </div>
+        </div>
+
+        <div class="composer-hint">
+          <span id="workspaceLabel" class="mono truncate">workspace: /workspace</span>
+          <span><span class="mono">/</span> commands &middot; Enter send &middot; Shift+Enter newline</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- 2C. RIGHT SIDEBAR: Workspace Files -->
+    <aside class="sidebar sidebar-right">
+      <section class="side-box" style="flex:1; display:flex; flex-direction:column; min-height:0;">
+        <div class="side-header">
+          <span>Workspace Files</span>
+          <span id="fileCount" class="side-count">0</span>
+        </div>
+        <div id="fileList" class="side-list" style="flex:1;"></div>
+      </section>
+    </aside>
+  </div>
+
+  <!-- 3. RIGHT SLIDE-OUT DRAWER (File Viewer & Tools Inspector) -->
+  <aside id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-header">
+      <span id="drawerTitle" class="mono" style="color:var(--cyan);font-size:13px;font-weight:600;">Viewer</span>
+      <div style="display:flex;gap:6px;">
+        <button id="copyDrawerBtn" class="btn btn-sm" style="display:none;">Copy</button>
+        <button id="closeDrawerBtn" class="btn btn-sm">Close</button>
+      </div>
+    </div>
+    <div id="drawerBody" class="drawer-body"></div>
+  </aside>
+
+  <!-- 4. DELETE SESSION CONFIRMATION MODAL -->
+  <div id="deleteModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle">
+    <div class="modal-box">
+      <div id="deleteModalTitle" class="modal-title">Delete Saved Session?</div>
+      <div id="deleteModalText" class="modal-text">
+        Are you sure you want to permanently delete this saved session?
+      </div>
+      <div class="modal-actions">
+        <button id="cancelDeleteBtn" class="btn btn-sm">Cancel</button>
+        <button id="confirmDeleteBtn" class="btn btn-sm btn-reject">Delete Session</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. CENTERED SETTINGS MODAL WINDOW -->
+  <div id="settingsModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle">
+    <div class="settings-modal-box">
+      <div class="settings-modal-header">
+        <span id="settingsModalTitle" style="color:var(--cyan);font-size:14px;font-weight:700;letter-spacing:0.6px;">&#x2699; Poseidon Settings &amp; Providers</span>
+        <button id="closeSettingsModalBtn" class="btn btn-sm">Close</button>
+      </div>
+      <div id="settingsModalTabs" class="settings-tabs" style="flex-wrap:wrap;"></div>
+      <div id="settingsModalBody" class="settings-modal-body"></div>
+    </div>
+  </div>
+
+  <script>
+    const els = {
+      statusPill: document.getElementById("statusPill"),
+      statusText: document.getElementById("statusText"),
+      folderPill: document.getElementById("folderPill"),
+      folderName: document.getElementById("folderName"),
+      modelSelect: document.getElementById("modelSelect"),
+      modeSelect: document.getElementById("modeSelect"),
+      planBtn: document.getElementById("planBtn"),
+      autoBtn: document.getElementById("autoBtn"),
+      toolsBtn: document.getElementById("toolsBtn"),
+      settingsBtn: document.getElementById("settingsBtn"),
+      testBtn: document.getElementById("testBtn"),
+      shutdownBtn: document.getElementById("shutdownBtn"),
+      goalBanner: document.getElementById("goalBanner"),
+      goalBannerText: document.getElementById("goalBannerText"),
+      cancelGoalBtn: document.getElementById("cancelGoalBtn"),
+      compactBtn: document.getElementById("compactBtn"),
+      undoBtn: document.getElementById("undoBtn"),
+      saveBtn: document.getElementById("saveBtn"),
+      newSessionBtn: document.getElementById("newSessionBtn"),
+      fileList: document.getElementById("fileList"),
+      fileCount: document.getElementById("fileCount"),
+      sessionList: document.getElementById("sessionList"),
+      sessionCount: document.getElementById("sessionCount"),
+      memoryBadge: document.getElementById("memoryBadge"),
+      ctxVal: document.getElementById("ctxVal"),
+      cpVal: document.getElementById("cpVal"),
+      limitVal: document.getElementById("limitVal"),
+      timeoutVal: document.getElementById("timeoutVal"),
+      stream: document.getElementById("stream"),
+      welcome: document.getElementById("welcome"),
+      promptInput: document.getElementById("promptInput"),
+      sendBtn: document.getElementById("sendBtn"),
+      slashToggleBtn: document.getElementById("slashToggleBtn"),
+      slashMenu: document.getElementById("slashMenu"),
+      workspaceLabel: document.getElementById("workspaceLabel"),
+      drawer: document.getElementById("drawer"),
+      drawerTitle: document.getElementById("drawerTitle"),
+      drawerBody: document.getElementById("drawerBody"),
+      copyDrawerBtn: document.getElementById("copyDrawerBtn"),
+      closeDrawerBtn: document.getElementById("closeDrawerBtn"),
+      deleteModal: document.getElementById("deleteModal"),
+      deleteModalText: document.getElementById("deleteModalText"),
+      cancelDeleteBtn: document.getElementById("cancelDeleteBtn"),
+      confirmDeleteBtn: document.getElementById("confirmDeleteBtn"),
+      settingsModal: document.getElementById("settingsModal"),
+      settingsModalTabs: document.getElementById("settingsModalTabs"),
+      settingsModalBody: document.getElementById("settingsModalBody"),
+      closeSettingsModalBtn: document.getElementById("closeSettingsModalBtn"),
+    };
+
+    let ws = null;
+    let state = null;
+    let busy = false;
+    let shuttingDown = false;
+    let liveStatusEl = null;
+    let slashMatches = [];
+    let slashSelectedIdx = 0;
+    let lastDrawerRawText = "";
+    let pendingDeleteSid = null;
+
+    function esc(str) {
+      return String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function renderMarkdown(text) {
+      const codeBlocks = [];
+      let safe = esc(text).replace(/```([\w-]*)\n([\s\S]*?)```/g, (_m, _lang, code) => {
+        const idx = codeBlocks.push(`<pre><code>${code}</code></pre>`) - 1;
+        return `@@CODEBLOCK_${idx}@@`;
+      });
+      safe = safe
+        .replace(/^### (.+)$/gm, "<h3>$1</h3>")
+        .replace(/^## (.+)$/gm, "<h2>$1</h2>")
+        .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/^- (.+)$/gm, "<li>$1</li>");
+      safe = safe.replace(/(<li>[\s\S]*?<\/li>)/g, "<ul>$1</ul>").replace(/<\/ul>\s*<ul>/g, "");
+      const html = safe
+        .split(/\n{2,}/)
+        .map((chunk) => {
+          const trimmed = chunk.trim();
+          if (!trimmed) return "";
+          if (/^<(h2|h3|ul|pre)|^@@CODEBLOCK_/.test(trimmed)) return trimmed;
+          return `<p>${trimmed.replace(/\n/g, "<br/>")}</p>`;
+        })
+        .join("");
+      return html.replace(/@@CODEBLOCK_(\d+)@@/g, (_m, idx) => codeBlocks[Number(idx)] || "");
+    }
+
+    function hideWelcome() { if (els.welcome && els.welcome.parentNode) els.welcome.style.display = "none"; }
+    function showWelcome() { if (els.welcome) els.welcome.style.display = "block"; }
+    function scrollBottom() { els.stream.scrollTop = els.stream.scrollHeight; }
+
+    function setBusy(isBusy) {
+      busy = isBusy;
+      els.sendBtn.disabled = isBusy || shuttingDown;
+      els.testBtn.disabled = isBusy || shuttingDown;
+      if (!isBusy && liveStatusEl) {
+        liveStatusEl.remove();
+        liveStatusEl = null;
+      }
+    }
+
+    function appendCard(cls, label, bodyHtml, extraRight = "") {
+      hideWelcome();
+      const card = document.createElement("div");
+      card.className = `card ${cls}`;
+      card.innerHTML = `<div class="card-label"><span>${esc(label)}</span>${extraRight}</div>` + bodyHtml;
+      els.stream.appendChild(card);
+      scrollBottom();
+      return card;
+    }
+
+    function appendStep(iconCls, iconChar, toolName, summary) {
+      hideWelcome();
+      const row = document.createElement("div");
+      row.className = "step-row";
+      row.innerHTML = `<span class="${iconCls}">${iconChar}</span><span class="tool-name">${esc(toolName)}</span><span>${esc(summary)}</span>`;
+      els.stream.appendChild(row);
+      scrollBottom();
+    }
+
+    function renderDiffHtml(diffText) {
+      return String(diffText || "")
+        .split("\n")
+        .map((line) => {
+          let cls = "";
+          if (line.startsWith("+") && !line.startsWith("+++")) cls = "add";
+          else if (line.startsWith("-") && !line.startsWith("---")) cls = "del";
+          else if (line.startsWith("@@")) cls = "hunk";
+          return `<div class="diff-line ${cls}">${esc(line)}</div>`;
+        })
+        .join("");
+    }
+
+    function appendDiffApproval(approvalId, diffText) {
+      hideWelcome();
+      const card = document.createElement("div");
+      card.className = "card diff-card";
+      card.innerHTML = `
+        <div class="diff-header">
+          <span class="mono" style="color:var(--cyan);font-size:12px;font-weight:600;">Unified Diff Approval Required</span>
+          <div class="diff-actions">
+            <button class="btn btn-approve btn-sm">Approve &amp; Apply</button>
+            <button class="btn btn-reject btn-sm">Reject</button>
+          </div>
+        </div>
+        <div class="diff-pre">${renderDiffHtml(diffText)}</div>
+      `;
+      const [approveBtn, rejectBtn] = card.querySelectorAll("button");
+      const decide = (approved) => {
+        approveBtn.disabled = true;
+        rejectBtn.disabled = true;
+        card.querySelector(".diff-actions").innerHTML = approved
+          ? `<span class="pill-pass">Approved</span>`
+          : `<span class="pill-fail">Rejected</span>`;
+        ws.send(JSON.stringify({ type: "diff_approval_response", approval_id: approvalId, approved }));
+      };
+      approveBtn.onclick = () => decide(true);
+      rejectBtn.onclick = () => decide(false);
+      els.stream.appendChild(card);
+      scrollBottom();
+    }
+
+    function appendTestCard(res) {
+      hideWelcome();
+      const pass = Boolean(res.verified);
+      const pill = pass ? `<span class="pill-pass">VERIFIED</span>` : `<span class="pill-fail">UNVERIFIED</span>`;
+      const fails = (res.failures || [])
+        .slice(0, 6)
+        .map((f) => `<div class="mono" style="color:#fda4af;font-size:12px;margin-top:4px;">&times; ${esc(f.test_name)} — ${esc(f.message)}</div>`)
+        .join("");
+      appendCard(
+        `test-card ${pass ? "pass" : "fail"}`,
+        "Isolated Docker Test Report",
+        `
+          <div class="mono" style="font-size:12.5px;">${esc(res.reason || "")}</div>
+          <div class="test-meta">
+            <span>Passed: <strong>${res.passed}</strong></span>
+            <span>Failed: <strong>${res.failed}</strong></span>
+            <span>Errors: <strong>${res.errors}</strong></span>
+            <span>Elapsed: <strong>${Number(res.elapsed_seconds || 0).toFixed(2)}s</strong></span>
+            <span>Sandbox: <strong>--network none</strong></span>
+          </div>
+          ${fails}
+        `,
+        pill
+      );
+    }
+
+    function appendCommandResult(res) {
+      if (res.clear_stream) {
+        els.stream.innerHTML = "";
+        els.stream.appendChild(els.welcome);
+        showWelcome();
+      }
+      if (Array.isArray(res.hydrate_messages)) {
+        els.stream.innerHTML = "";
+        els.stream.appendChild(els.welcome);
+        if (res.hydrate_messages.length) {
+          hideWelcome();
+          res.hydrate_messages.forEach((m) => {
+            appendCard(
+              m.role === "user" ? "user" : "assistant",
+              m.role === "user" ? "You" : "Poseidon",
+              `<div class="md">${renderMarkdown(m.content)}</div>`
+            );
+          });
+        }
+      }
+
+      let body = "";
+      if (res.message) body += `<div class="md">${renderMarkdown(res.message)}</div>`;
+      if (res.kind === "table" && Array.isArray(res.columns) && Array.isArray(res.rows)) {
+        const thead = res.columns.map((c) => `<th>${esc(c)}</th>`).join("");
+        const tbody = res.rows.map((r) => `<tr>${r.map((cell) => `<td>${esc(cell)}</td>`).join("")}</tr>`).join("");
+        body += `<table class="cmd-table"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
+      }
+      if (res.kind === "files" && Array.isArray(res.files)) {
+        body += `<div class="quick-prompts" style="justify-content:flex-start;margin-top:10px;">` +
+          res.files.map((f) => `<button class="quick-chip mono" data-open-file="${esc(f)}">${esc(f)}</button>`).join("") +
+          `</div>`;
+      }
+      if (res.kind === "search_hits" && Array.isArray(res.hits)) {
+        body += `<div class="hit-list">` +
+          res.hits.map((h) => `
+            <button class="hit-item" data-open-file="${esc(h.path)}">
+              <div class="truncate">
+                <div class="mono" style="color:var(--cyan);font-size:12px;">${esc(h.location)}</div>
+                <div class="mono truncate" style="font-size:11.5px;color:var(--text-muted);">${esc(h.symbol)}</div>
+              </div>
+              <span class="pill-tag">${esc(h.detail)}</span>
+            </button>
+          `).join("") + `</div>`;
+      }
+      if (res.code) body += `<div class="md"><pre><code>${esc(res.code)}</code></pre></div>`;
+      if (Array.isArray(res.warnings) && res.warnings.length) {
+        body += res.warnings.map((w) => `<div style="color:var(--gold);font-size:12px;margin-top:6px;">! ${esc(w)}</div>`).join("");
+      }
+
+      const pill = res.ok
+        ? `<span class="pill-tag">${esc(res.command || "cmd")}</span>`
+        : `<span class="pill-fail">${esc(res.command || "error")}</span>`;
+      const card = appendCard(res.ok ? "cmd-card" : "error", res.title || "Command", body, pill);
+      card.querySelectorAll("[data-open-file]").forEach((btn) => {
+        btn.onclick = () => openFileDrawer(btn.dataset.openFile);
+      });
+    }
+
+    function applyState(nextState) {
+      state = nextState;
+      els.workspaceLabel.textContent = `workspace: ${state.workspace}`;
+      els.folderName.textContent = state.workspace_folder || state.workspace;
+      els.folderPill.title = state.workspace;
+
+      // Models dropdown (below composer on left)
+      const existing = new Set((state.recommended_models || []).map((m) => m.id));
+      const options = [...(state.recommended_models || [])];
+      if (state.model && !existing.has(state.model)) {
+        options.unshift({ id: state.model, notes: "Active model" });
+      }
+      els.modelSelect.innerHTML = options
+        .map((m) => `<option value="${esc(m.id)}" ${m.id === state.model ? "selected" : ""}>${esc(m.id)}</option>`)
+        .join("");
+
+      // Mode & toggles (below composer on right)
+      els.modeSelect.value = state.mode || "agent";
+      els.planBtn.textContent = state.plan_mode ? "Plan: ON" : "Plan: OFF";
+      els.planBtn.classList.toggle("active", Boolean(state.plan_mode));
+      els.autoBtn.textContent = state.auto_approve ? "Auto: ON" : "Auto: OFF";
+      els.autoBtn.classList.toggle("active", Boolean(state.auto_approve));
+
+      // Telemetry
+      els.ctxVal.textContent = `${(state.context_chars || 0).toLocaleString()} ch`;
+      els.cpVal.textContent = String((state.checkpoints || []).length);
+      els.limitVal.textContent = String(state.max_calls || 8);
+      els.timeoutVal.textContent = `${state.test_timeout || 15}s`;
+      els.memoryBadge.textContent = (state.memory_sources || []).length
+        ? `mem: ${state.memory_sources.join(", ")}`
+        : "mem: none";
+
+      // Right sidebar: Workspace Files
+      const files = state.files || [];
+      els.fileCount.textContent = String(files.length);
+      els.fileList.innerHTML = files.length
+        ? files
+            .map(
+              (f) => `<button class="side-item mono" data-file="${esc(f)}" title="${esc(f)}"><span class="truncate">${esc(f)}</span></button>`
+            )
+            .join("")
+        : `<div style="padding:6px;font-size:12px;color:var(--text-dim);">Workspace is empty</div>`;
+      els.fileList.querySelectorAll("[data-file]").forEach((btn) => {
+        btn.onclick = () => openFileDrawer(btn.dataset.file);
+      });
+
+      // Left sidebar: Saved Sessions with Trash Delete button
+      const sessions = state.sessions || [];
+      els.sessionCount.textContent = String(sessions.length);
+      els.sessionList.innerHTML = sessions.length
+        ? sessions
+            .map(
+              (s) => `
+              <div class="session-row">
+                <button class="side-item ${s.session_id === state.session_id ? "active" : ""}" data-sid="${esc(s.session_id)}" title="${esc(s.title || s.session_id)}">
+                  <span class="truncate">${esc(s.title || s.session_id)}</span>
+                  <span class="mono" style="font-size:11px;color:var(--text-dim);">${s.message_count}</span>
+                </button>
+                <button class="trash-btn" data-del-sid="${esc(s.session_id)}" data-del-title="${esc(s.title || s.session_id)}" title="Delete saved session">
+                  <svg width="14" height="14" aria-hidden="true"><use href="#icon-trash" /></svg>
+                </button>
+              </div>`
+            )
+            .join("")
+        : `<div style="padding:6px;font-size:12px;color:var(--text-dim);">No saved sessions yet</div>`;
+
+      els.sessionList.querySelectorAll("[data-sid]").forEach((btn) => {
+        btn.onclick = () => loadSession(btn.dataset.sid);
+      });
+      els.sessionList.querySelectorAll("[data-del-sid]").forEach((btn) => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          openDeleteModal(btn.dataset.delSid, btn.dataset.delTitle);
+        };
+      });
+    }
+
+    function openDeleteModal(sid, title) {
+      pendingDeleteSid = sid;
+      els.deleteModalText.innerHTML =
+        `Delete saved session <strong style="color:var(--text-main);">${esc(title)}</strong> ` +
+        `(<span class="mono" style="color:var(--cyan-soft);">${esc(sid)}</span>)? This cannot be undone.`;
+      els.deleteModal.classList.add("open");
+    }
+
+    function closeDeleteModal() {
+      pendingDeleteSid = null;
+      els.deleteModal.classList.remove("open");
+    }
+
+    async function confirmDeleteSession() {
+      if (!pendingDeleteSid) return;
+      const sid = pendingDeleteSid;
+      closeDeleteModal();
+      const resp = await fetch("/api/sessions/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sid }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        appendCard("error", "Delete Failed", `<p>${esc(data.error || "Could not delete session.")}</p>`);
+        return;
+      }
+      applyState(data.state);
+      if (data.cleared_active) {
+        els.stream.innerHTML = "";
+        els.stream.appendChild(els.welcome);
+        showWelcome();
+      }
+    }
+
+    async function openFileDrawer(relPath) {
+      const resp = await fetch(`/api/file?path=${encodeURIComponent(relPath)}`);
+      const data = await resp.json();
+      if (!resp.ok) {
+        appendCard("error", "File Viewer", `<p>${esc(data.error || "Cannot read file")}</p>`);
+        return;
+      }
+      lastDrawerRawText = data.content || "";
+      els.drawerTitle.textContent = `${data.path} (${data.lines} lines)`;
+      els.copyDrawerBtn.style.display = "inline-block";
+      els.drawerBody.innerHTML = lastDrawerRawText
+        .split("\n")
+        .map((line, i) => `<div class="code-line"><span class="code-ln">${i + 1}</span><span>${esc(line)}</span></div>`)
+        .join("");
+      els.drawer.classList.add("open");
+    }
+
+    async function openToolsDrawer() {
+      els.drawerTitle.textContent = "Loading Tools Inventory...";
+      els.copyDrawerBtn.style.display = "none";
+      els.drawerBody.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:var(--text-muted);"><span class="spinner"></span> Inspecting Built-in, Plugin, and MCP tools...</div>`;
+      els.drawer.classList.add("open");
+      const resp = await fetch("/api/tools");
+      const data = await resp.json();
+      els.drawerTitle.textContent = `Active Tools (${(data.tools || []).length})${data.plan_mode ? " — Plan Mode" : ""}`;
+      const rows = (data.tools || [])
+        .map(
+          (t) => `
+          <div style="padding:9px 10px;border:1px solid rgba(56,232,255,0.16);border-radius:8px;margin-bottom:8px;background:rgba(8,22,36,0.75);">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+              <strong style="color:var(--cyan-soft);">${esc(t.name)}</strong>
+              <div style="display:flex;gap:5px;">
+                <span class="pill-tag">${esc(t.source)}</span>
+                <span class="pill-tag ${t.read_only ? "" : "write"}">${t.read_only ? "read-only" : "write"}</span>
+              </div>
+            </div>
+            <div style="font-family:var(--font-sans);font-size:12px;color:var(--text-muted);margin-top:4px;">${esc(t.description)}</div>
+          </div>`
+        )
+        .join("");
+      els.drawerBody.innerHTML = rows || `<div style="color:var(--text-dim);">No tools registered.</div>`;
+    }
+
+    // ── Centered 5-Tab Settings Modal (General | Local AI & Keys | OpenRouter | MCP | Commands) ──
+    let activeSettingsTab = "general";
+
+    function closeSettingsModal() {
+      els.settingsModal.classList.remove("open");
+    }
+
+    async function openSettingsDrawer(tab = activeSettingsTab) {
+      activeSettingsTab = tab;
+      els.settingsModal.classList.add("open");
+      renderSettingsDrawer();
+    }
+
+    function renderSettingsDrawer() {
+      const customCmdCount = state && state.custom_commands ? state.custom_commands.length : 0;
+      els.settingsModalTabs.innerHTML = `
+        <button class="tab-btn ${activeSettingsTab === "general" ? "active" : ""}" data-tab="general">General</button>
+        <button class="tab-btn ${activeSettingsTab === "providers" ? "active" : ""}" data-tab="providers">Local AI &amp; Keys</button>
+        <button class="tab-btn ${activeSettingsTab === "models" ? "active" : ""}" data-tab="models">OpenRouter</button>
+        <button class="tab-btn ${activeSettingsTab === "mcp" ? "active" : ""}" data-tab="mcp">MCP (${state ? state.mcp_server_count || 0 : 0})</button>
+        <button class="tab-btn ${activeSettingsTab === "commands" ? "active" : ""}" data-tab="commands">Custom /Cmds (${customCmdCount})</button>
+      `;
+      els.settingsModalTabs.querySelectorAll("[data-tab]").forEach((btn) => {
+        btn.onclick = () => {
+          activeSettingsTab = btn.dataset.tab;
+          renderSettingsDrawer();
+        };
+      });
+
+      const bodyEl = els.settingsModalBody;
+      if (activeSettingsTab === "general") renderGeneralSettings(bodyEl);
+      else if (activeSettingsTab === "providers") renderProvidersSettings(bodyEl);
+      else if (activeSettingsTab === "models") renderModelsSettings(bodyEl);
+      else if (activeSettingsTab === "mcp") renderMcpSettings(bodyEl);
+      else renderCustomCommandsSettings(bodyEl);
+    }
+
+    async function renderCustomCommandsSettings(container) {
+      const cmds = (state && state.custom_commands) || [];
+      container.innerHTML = `
+        <div class="settings-card">
+          <div class="form-label" style="margin-bottom:8px;">Saved Custom /Commands (${cmds.length})</div>
+          ${cmds.length ? cmds.map((c) => `
+            <div style="padding:8px 9px;border:1px solid rgba(56,232,255,0.16);border-radius:8px;margin-bottom:8px;background:rgba(4,13,22,0.85);">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                <div style="display:flex;align-items:center;gap:7px;">
+                  <strong class="mono" style="color:var(--cyan-soft);font-size:12.5px;">/${esc(c.name)}</strong>
+                  <span class="${c.scope === "global" ? "pill-pass" : "pill-tag"}">${esc(c.scope)}</span>
+                </div>
+                <button class="btn btn-sm btn-reject" data-del-cmd="${esc(c.name)}" data-del-scope="${esc(c.scope)}">Delete</button>
+              </div>
+              <div style="font-size:11.8px;color:var(--text-muted);margin-top:4px;">${esc(c.description)}</div>
+              <div class="mono" style="font-size:11px;color:var(--text-dim);margin-top:4px;white-space:pre-wrap;">${esc(c.template)}</div>
+            </div>`).join("") : `<div style="font-size:12px;color:var(--text-dim);">No custom /commands yet. Global commands persist across EVERY project &amp; session!</div>`}
+        </div>
+
+        <div class="settings-card">
+          <div class="form-label" style="margin-bottom:8px;">Create Reusable Custom /Command</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Command Name (without /)</label>
+              <input id="cmdNameInput" type="text" class="form-input" placeholder="e.g. review or refactor" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Scope</label>
+              <select id="cmdScopeSelect" class="form-input" style="font-family:var(--font-sans);">
+                <option value="global">Global (all projects &amp; sessions)</option>
+                <option value="workspace">Workspace (this folder only)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Short Description</label>
+            <input id="cmdDescInput" type="text" class="form-input" placeholder="e.g. Review code for bugs and security issues" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Prompt Template (use $ARGUMENTS for optional input)</label>
+            <textarea id="cmdTemplateInput" rows="3" class="form-input" placeholder="Review the current workspace changes for bugs, edge cases, and security issues. Focus on: $ARGUMENTS"></textarea>
+          </div>
+          <div id="cmdSaveMsg" style="font-size:11.5px;color:var(--gold);margin-bottom:6px;"></div>
+          <button id="saveCmdBtn" class="btn btn-primary btn-sm">+ Save Custom /Command</button>
+        </div>
+      `;
+
+      document.getElementById("saveCmdBtn").onclick = async () => {
+        const r = await fetch("/api/custom-commands/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: document.getElementById("cmdNameInput").value.trim(),
+            scope: document.getElementById("cmdScopeSelect").value,
+            description: document.getElementById("cmdDescInput").value.trim(),
+            template: document.getElementById("cmdTemplateInput").value.trim(),
+          }),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          document.getElementById("cmdSaveMsg").textContent = d.error || "Failed to save command.";
+          return;
+        }
+        applyState(d.state);
+        renderSettingsDrawer();
+      };
+
+      container.querySelectorAll("[data-del-cmd]").forEach((btn) => {
+        btn.onclick = async () => {
+          const r = await fetch("/api/custom-commands/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: btn.dataset.delCmd, scope: btn.dataset.delScope }),
+          });
+          const d = await r.json();
+          if (r.ok) {
+            applyState(d.state);
+            renderSettingsDrawer();
+          }
+        };
+      });
+    }
+
+    async function renderProvidersSettings(container) {
+      container.innerHTML = `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted);"><span class="spinner"></span> Checking Local AI (Ollama / LM Studio) &amp; Provider Keys...</div>`;
+      const resp = await fetch("/api/providers");
+      const data = await resp.json();
+      const keys = data.keys || {};
+      const local = data.local || {};
+      const presets = data.presets || [];
+
+      const renderLocalBlock = (prov, label) => {
+        const info = local[prov] || { reachable: false, models: [], base_url: "" };
+        const pill = info.reachable
+          ? `<span class="pill-pass">ONLINE (${info.models.length})</span>`
+          : `<span class="pill-tag">OFFLINE</span>`;
+        const modelsHtml = info.models.length
+          ? info.models.map((mid) => `
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(56,232,255,0.08);">
+                <span class="mono truncate" style="font-size:11.8px;color:var(--cyan-soft);">${esc(mid)}</span>
+                <button class="btn btn-sm btn-primary" data-add-prov-model="${esc(mid)}">+ Add &amp; Use</button>
+              </div>`).join("")
+          : `<div style="font-size:11.5px;color:var(--text-dim);margin-top:4px;">Start ${label} on your host machine to auto-detect models.</div>`;
+        return `
+          <div style="padding:8px 9px;border:1px solid rgba(56,232,255,0.16);border-radius:8px;margin-top:8px;background:rgba(4,13,22,0.82);">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+              <strong style="font-size:12.5px;color:var(--text-main);">${label}</strong>
+              ${pill}
+            </div>
+            ${modelsHtml}
+          </div>`;
+      };
+
+      const keyRows = Object.entries(keys).map(([prov, info]) => `
+        <div style="padding:8px 0;border-bottom:1px solid rgba(56,232,255,0.08);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
+            <span style="font-size:12.2px;font-weight:600;color:var(--text-main);">${esc(info.label)}</span>
+            <span class="${info.configured ? "pill-pass" : "pill-tag"}">${info.configured ? `${esc(info.source)}: ${esc(info.hint)}` : "not set"}</span>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <input type="password" class="form-input" id="keyInput_${prov}" placeholder="Paste ${esc(info.env_var)}..." autocomplete="off" />
+            <button class="btn btn-sm btn-primary" data-save-key="${prov}">Save</button>
+            ${info.source === "saved" ? `<button class="btn btn-sm btn-reject" data-clear-key="${prov}">Clear</button>` : ""}
+          </div>
+        </div>`).join("");
+
+      container.innerHTML = `
+        <div class="settings-card">
+          <div class="form-label" style="margin-bottom:6px;">Local AI — Ollama &amp; LM Studio (Zero API Key)</div>
+          <div class="form-group">
+            <label class="form-label">Ollama OpenAI Endpoint</label>
+            <input id="ollamaUrlInput" type="text" class="form-input" value="${esc(data.ollama_base_url || "")}" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">LM Studio OpenAI Endpoint</label>
+            <input id="lmstudioUrlInput" type="text" class="form-input" value="${esc(data.lmstudio_base_url || "")}" />
+          </div>
+          <div style="display:flex;justify-content:flex-end;">
+            <button id="saveLocalUrlsBtn" class="btn btn-primary btn-sm">Save &amp; Detect Local Models</button>
+          </div>
+          ${renderLocalBlock("ollama", "Ollama")}
+          ${renderLocalBlock("lmstudio", "LM Studio")}
+        </div>
+
+        <div class="settings-card">
+          <div class="form-label" style="margin-bottom:4px;">Direct Cloud API Keys (Claude, Gemini, GPT, OpenRouter)</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">
+            Stored securely outside your project folder (0600 Docker volume) — never written to Git or logs.
+          </div>
+          ${keyRows}
+        </div>
+
+        <div class="settings-card">
+          <div class="form-label" style="margin-bottom:8px;">Quick-Add Direct Cloud Models</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">
+            ${presets.map((p) => `<button class="quick-chip mono" data-add-prov-model="${esc(p.id)}" title="${esc(p.notes)}">+ ${esc(p.id)}</button>`).join("")}
+          </div>
+        </div>
+      `;
+
+      document.getElementById("saveLocalUrlsBtn").onclick = async () => {
+        const r = await fetch("/api/providers/local-urls", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ollama_base_url: document.getElementById("ollamaUrlInput").value.trim(),
+            lmstudio_base_url: document.getElementById("lmstudioUrlInput").value.trim(),
+          }),
+        });
+        const d = await r.json();
+        if (r.ok) applyState(d.state);
+        renderSettingsDrawer();
+      };
+
+      container.querySelectorAll("[data-save-key]").forEach((btn) => {
+        btn.onclick = async () => {
+          const prov = btn.dataset.saveKey;
+          const val = document.getElementById(`keyInput_${prov}`).value.trim();
+          if (!val) return;
+          const r = await fetch("/api/providers/key", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider: prov, action: "set", api_key: val }),
+          });
+          if (r.ok) renderSettingsDrawer();
+        };
+      });
+
+      container.querySelectorAll("[data-clear-key]").forEach((btn) => {
+        btn.onclick = async () => {
+          const prov = btn.dataset.clearKey;
+          const r = await fetch("/api/providers/key", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider: prov, action: "clear" }),
+          });
+          if (r.ok) renderSettingsDrawer();
+        };
+      });
+
+      container.querySelectorAll("[data-add-prov-model]").forEach((btn) => {
+        btn.onclick = async () => {
+          const mid = btn.dataset.addProvModel;
+          const r = await fetch("/api/models/add", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model_id: mid, activate: true }),
+          });
+          const d = await r.json();
+          if (r.ok) applyState(d.state);
+        };
+      });
+    }
+
+    function renderGeneralSettings(container) {
+      const s = state || {};
+      container.innerHTML = `
+        <div class="settings-card">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Max Model Calls / Turn (1-30)</label>
+              <input id="setMaxCalls" type="number" min="1" max="30" class="form-input" value="${esc(s.max_calls ?? 8)}" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Docker Test Timeout (sec)</label>
+              <input id="setTimeout" type="number" min="1" max="300" class="form-input" value="${esc(s.test_timeout ?? 15)}" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Goal Max Iterations (1-15)</label>
+              <input id="setGoalSteps" type="number" min="1" max="15" class="form-input" value="${esc(s.goal_max_iterations ?? 5)}" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Auto-Close Grace (sec, 0 = Keep Alive)</label>
+              <input id="setAutoClose" type="number" min="0" max="3600" class="form-input" value="${esc(s.auto_close_seconds ?? 8)}" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Docker Sandbox Image</label>
+            <input id="setSandboxImg" type="text" class="form-input" value="${esc(s.sandbox_image || "poseidon-sandbox:dev")}" />
+          </div>
+          <div class="form-group">
+            <label class="check-row">
+              <input id="setWebTools" type="checkbox" ${s.web_tools_enabled !== false ? "checked" : ""} />
+              <span>Enable <code>web_search</code> &amp; <code>fetch_url</code> tools (read-only, SSRF-safe)</span>
+            </label>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;">
+            <span id="setSaveNote" style="font-size:12px;color:var(--emerald);"></span>
+            <button id="saveGeneralBtn" class="btn btn-primary btn-sm">Save Settings</button>
+          </div>
+        </div>
+        <div style="font-family:var(--font-sans);font-size:11.5px;color:var(--text-dim);">
+          Saved to <code>.poseidon/settings.json</code> and shared automatically with the terminal CLI.
+        </div>
+      `;
+      document.getElementById("saveGeneralBtn").onclick = async () => {
+        await updateSettings({
+          max_calls: Number(document.getElementById("setMaxCalls").value || 8),
+          test_timeout: Number(document.getElementById("setTimeout").value || 15),
+          goal_max_iterations: Number(document.getElementById("setGoalSteps").value || 5),
+          auto_close_seconds: Number(document.getElementById("setAutoClose").value || 0),
+          sandbox_image: document.getElementById("setSandboxImg").value.trim(),
+          web_tools_enabled: document.getElementById("setWebTools").checked,
+        });
+        const note = document.getElementById("setSaveNote");
+        if (note) note.textContent = "Saved!";
+      };
+    }
+
+    function renderModelsSettings(container) {
+      const customs = (state && state.custom_models) || [];
+      container.innerHTML = `
+        <div class="settings-card">
+          <label class="form-label">Add Any OpenRouter Model ID</label>
+          <div style="display:flex;gap:6px;">
+            <input id="manualModelInput" type="text" class="form-input" placeholder="e.g. qwen/qwen3-coder:free" />
+            <button id="manualAddModelBtn" class="btn btn-primary btn-sm">+ Add</button>
+          </div>
+          <div id="modelAddMsg" style="font-size:11.5px;color:var(--gold);margin-top:6px;"></div>
+        </div>
+
+        <div class="settings-card">
+          <div class="form-label" style="margin-bottom:8px;">Your Custom Models (${customs.length})</div>
+          <div id="customModelsList">
+            ${customs.length ? customs.map((m) => `
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(56,232,255,0.08);">
+                <span class="mono truncate" style="font-size:12px;color:var(--cyan-soft);">${esc(m)}</span>
+                <button class="btn btn-sm btn-reject" data-rm-model="${esc(m)}">Remove</button>
+              </div>`).join("") : `<div style="font-size:12px;color:var(--text-dim);">No custom models added yet.</div>`}
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="form-label" style="margin-bottom:8px;">Browse Live OpenRouter Catalog</div>
+          <div style="display:flex;gap:6px;margin-bottom:8px;">
+            <input id="orSearchInput" type="text" class="form-input" placeholder="Filter models (e.g. nvidia, qwen, deepseek)..." />
+            <button id="orFetchBtn" class="btn btn-primary btn-sm">Fetch</button>
+          </div>
+          <div style="display:flex;gap:14px;margin-bottom:10px;">
+            <label class="check-row"><input id="orFreeOnly" type="checkbox" checked /><span>Free (:free) only</span></label>
+            <label class="check-row"><input id="orToolsOnly" type="checkbox" checked /><span>Tool-capable only</span></label>
+          </div>
+          <div id="orCatalogList" style="max-height:260px;overflow-y:auto;">
+            <div style="font-size:12px;color:var(--text-dim);">Click Fetch to browse live OpenRouter models.</div>
+          </div>
+        </div>
+      `;
+
+      const addModel = async (mid) => {
+        const resp = await fetch("/api/models/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model_id: mid, activate: true }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          document.getElementById("modelAddMsg").textContent = data.error || "Failed to add model.";
+          return;
+        }
+        applyState(data.state);
+        renderSettingsDrawer();
+      };
+
+      document.getElementById("manualAddModelBtn").onclick = () => {
+        const val = document.getElementById("manualModelInput").value.trim();
+        if (val) addModel(val);
+      };
+      container.querySelectorAll("[data-rm-model]").forEach((btn) => {
+        btn.onclick = async () => {
+          const resp = await fetch("/api/models/remove", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model_id: btn.dataset.rmModel }),
+          });
+          const data = await resp.json();
+          if (resp.ok) {
+            applyState(data.state);
+            renderSettingsDrawer();
+          }
+        };
+      });
+
+      const fetchCatalog = async () => {
+        const listEl = document.getElementById("orCatalogList");
+        listEl.innerHTML = `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted);"><span class="spinner"></span> Querying OpenRouter catalog...</div>`;
+        const q = document.getElementById("orSearchInput").value.trim();
+        const freeOnly = document.getElementById("orFreeOnly").checked;
+        const toolsOnly = document.getElementById("orToolsOnly").checked;
+        const resp = await fetch(`/api/openrouter-models?q=${encodeURIComponent(q)}&free_only=${freeOnly}&tools_only=${toolsOnly}`);
+        const data = await resp.json();
+        if (!resp.ok) {
+          listEl.innerHTML = `<div style="font-size:12px;color:#fda4af;">${esc(data.error || "Fetch failed")}</div>`;
+          return;
+        }
+        const items = data.models || [];
+        listEl.innerHTML = items.length
+          ? items.map((m) => `
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 4px;border-bottom:1px solid rgba(56,232,255,0.08);">
+                <div style="min-width:0;">
+                  <div class="mono truncate" style="font-size:11.8px;color:var(--cyan-soft);">${esc(m.id)}</div>
+                  <div style="font-size:11px;color:var(--text-dim);">ctx: ${m.context_length ? Number(m.context_length).toLocaleString() : "?"} ${m.is_free ? "· FREE" : ""}</div>
+                </div>
+                <button class="btn btn-sm btn-primary" data-add-or="${esc(m.id)}">+ Add</button>
+              </div>`).join("")
+          : `<div style="font-size:12px;color:var(--text-dim);">No matching models found.</div>`;
+        listEl.querySelectorAll("[data-add-or]").forEach((btn) => {
+          btn.onclick = () => addModel(btn.dataset.addOr);
+        });
+      };
+      document.getElementById("orFetchBtn").onclick = fetchCatalog;
+      fetchCatalog();
+    }
+
+    async function renderMcpSettings(container) {
+      container.innerHTML = `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted);"><span class="spinner"></span> Inspecting MCP servers...</div>`;
+      const resp = await fetch("/api/mcp");
+      const data = await resp.json();
+      const servers = data.servers || [];
+      container.innerHTML = `
+        <div class="settings-card">
+          <div class="form-label" style="margin-bottom:8px;">Configured MCP Servers (.poseidon/mcp.json)</div>
+          ${servers.length ? servers.map((s) => `
+            <div style="padding:8px 9px;border:1px solid rgba(56,232,255,0.16);border-radius:8px;margin-bottom:8px;background:rgba(4,13,22,0.85);">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                <strong class="mono" style="color:var(--cyan-soft);font-size:12.5px;">${esc(s.name)}</strong>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <span class="${s.connected ? "pill-pass" : "pill-tag"}">${s.connected ? "connected" : "configured"}</span>
+                  <button class="btn btn-sm btn-reject" data-rm-mcp="${esc(s.name)}">Remove</button>
+                </div>
+              </div>
+              <div class="mono" style="font-size:11.5px;color:var(--text-muted);margin-top:5px;">${esc(s.command)} ${esc((s.args || []).join(" "))}</div>
+              ${(s.tools || []).length ? `<div style="font-size:11px;color:#6ee7b7;margin-top:4px;">Tools: ${esc(s.tools.join(", "))}</div>` : ""}
+            </div>`).join("") : `<div style="font-size:12px;color:var(--text-dim);">No MCP servers configured in this workspace yet.</div>`}
+          ${(data.warnings || []).map((w) => `<div style="font-size:11.5px;color:var(--gold);margin-top:6px;">! ${esc(w)}</div>`).join("")}
+        </div>
+
+        <div class="settings-card">
+          <div class="form-label" style="margin-bottom:8px;">Add Stdio MCP Server</div>
+          <div class="form-group">
+            <label class="form-label">Server Name</label>
+            <input id="mcpNameInput" type="text" class="form-input" placeholder="e.g. tax or docs" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Command</label>
+            <input id="mcpCmdInput" type="text" class="form-input" placeholder="e.g. python" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Arguments (space-separated)</label>
+            <input id="mcpArgsInput" type="text" class="form-input" placeholder="e.g. /workspace/.poseidon/demo_mcp.py" />
+          </div>
+          <div id="mcpAddMsg" style="font-size:11.5px;color:var(--gold);margin-bottom:6px;"></div>
+          <button id="addMcpBtn" class="btn btn-primary btn-sm">+ Add MCP Server</button>
+        </div>
+      `;
+
+      document.getElementById("addMcpBtn").onclick = async () => {
+        const respAdd = await fetch("/api/mcp/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: document.getElementById("mcpNameInput").value.trim(),
+            command: document.getElementById("mcpCmdInput").value.trim(),
+            args: document.getElementById("mcpArgsInput").value.trim(),
+          }),
+        });
+        const d = await respAdd.json();
+        if (!respAdd.ok) {
+          document.getElementById("mcpAddMsg").textContent = d.error || "Failed to add MCP server.";
+          return;
+        }
+        applyState(d.state);
+        renderSettingsDrawer();
+      };
+      container.querySelectorAll("[data-rm-mcp]").forEach((btn) => {
+        btn.onclick = async () => {
+          const respRm = await fetch("/api/mcp/remove", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: btn.dataset.rmMcp }),
+          });
+          const d = await respRm.json();
+          if (respRm.ok) {
+            applyState(d.state);
+            renderSettingsDrawer();
+          }
+        };
+      });
+    }
+
+    async function updateSettings(patch) {
+      const resp = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      applyState(await resp.json());
+    }
+
+    async function loadSession(sid) {
+      const resp = await fetch("/api/sessions/load", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sid }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) return;
+      applyState(data.state);
+      els.stream.innerHTML = "";
+      els.stream.appendChild(els.welcome);
+      if ((data.messages || []).length) {
+        hideWelcome();
+        data.messages.forEach((m) => {
+          appendCard(
+            m.role === "user" ? "user" : "assistant",
+            m.role === "user" ? "You" : "Poseidon",
+            `<div class="md">${renderMarkdown(m.content)}</div>`
+          );
+        });
+      } else {
+        showWelcome();
+      }
+    }
+
+    // ── Floating `/` Command & Fuzzy `@file` Autocomplete ───────────────────
+    let paletteMode = "slash"; // "slash" or "file"
+
+    function closeSlashMenu() {
+      els.slashMenu.classList.remove("open");
+      slashMatches = [];
+      slashSelectedIdx = 0;
+    }
+
+    function updateSlashMenu(forceOpen = false) {
+      const val = els.promptInput.value;
+
+      // Check fuzzy `@file` mention at end of input (inspired by fzf!)
+      const atMatch = !forceOpen && val.match(/(?:^|\s)@([^\s]*)$/);
+      if (atMatch) {
+        const q = atMatch[1].toLowerCase();
+        const files = (state && state.files) || [];
+        paletteMode = "file";
+        slashMatches = files
+          .filter((f) => f.toLowerCase().includes(q))
+          .slice(0, 12)
+          .map((f) => ({ name: f, usage: `@${f}`, desc: "Attach file context" }));
+        if (!slashMatches.length) {
+          closeSlashMenu();
+          return;
+        }
+        slashSelectedIdx = Math.min(slashSelectedIdx, slashMatches.length - 1);
+        els.slashMenu.innerHTML = slashMatches
+          .map(
+            (c, i) => `
+            <div class="slash-item ${i === slashSelectedIdx ? "selected" : ""}" data-idx="${i}">
+              <span class="slash-usage">${esc(c.usage)}</span>
+              <span class="slash-desc truncate">${esc(c.desc)}</span>
+            </div>`
+          )
+          .join("");
+        els.slashMenu.classList.add("open");
+        els.slashMenu.querySelectorAll(".slash-item").forEach((el) => {
+          el.onmousedown = (e) => {
+            e.preventDefault();
+            pickSlashCommand(Number(el.dataset.idx));
+          };
+        });
+        return;
+      }
+
+      paletteMode = "slash";
+      const commands = (state && state.slash_commands) || [];
+      if (!forceOpen && (!val.startsWith("/") || val.includes(" "))) {
+        closeSlashMenu();
+        return;
+      }
+      const query = val.startsWith("/") ? val.toLowerCase() : "/";
+      slashMatches = commands.filter((c) => c.name.startsWith(query));
+      if (!slashMatches.length) {
+        closeSlashMenu();
+        return;
+      }
+      slashSelectedIdx = Math.min(slashSelectedIdx, slashMatches.length - 1);
+      els.slashMenu.innerHTML = slashMatches
+        .map(
+          (c, i) => `
+          <div class="slash-item ${i === slashSelectedIdx ? "selected" : ""}" data-idx="${i}">
+            <span class="slash-usage">${esc(c.usage)}</span>
+            <span class="slash-desc truncate">${esc(c.desc)}</span>
+          </div>`
+        )
+        .join("");
+      els.slashMenu.classList.add("open");
+      els.slashMenu.querySelectorAll(".slash-item").forEach((el) => {
+        el.onmousedown = (e) => {
+          e.preventDefault();
+          pickSlashCommand(Number(el.dataset.idx));
+        };
+      });
+    }
+
+    function pickSlashCommand(idx) {
+      const cmd = slashMatches[idx];
+      if (!cmd) return;
+      if (paletteMode === "file") {
+        els.promptInput.value = els.promptInput.value.replace(/@[^\s]*$/, `@${cmd.name} `);
+        closeSlashMenu();
+        els.promptInput.focus();
+        return;
+      }
+      const needsArg = cmd.usage.includes("<") || cmd.usage.includes("[args]");
+      closeSlashMenu();
+      if (needsArg) {
+        els.promptInput.value = `${cmd.name} `;
+        els.promptInput.focus();
+      } else {
+        els.promptInput.value = cmd.name;
+        sendPrompt();
+      }
+    }
+
+    function sendPrompt(explicitText = null) {
+      const text = (explicitText !== null ? explicitText : els.promptInput.value).trim();
+      if (!text || busy || shuttingDown || !ws || ws.readyState !== WebSocket.OPEN) return;
+      closeSlashMenu();
+      els.promptInput.value = "";
+      els.promptInput.style.height = "auto";
+
+      appendCard("user", text.startsWith("/") ? "Command" : "You", `<div class="md">${renderMarkdown(text)}</div>`);
+      setBusy(true);
+      liveStatusEl = document.createElement("div");
+      liveStatusEl.className = "step-row";
+      liveStatusEl.innerHTML = `<span class="spinner"></span><span>${text.startsWith("/") ? `Running ${esc(text)}...` : "Poseidon is thinking..."}</span>`;
+      els.stream.appendChild(liveStatusEl);
+      scrollBottom();
+      ws.send(JSON.stringify({ type: "prompt", prompt: text }));
+    }
+
+    function markShuttingDown() {
+      shuttingDown = true;
+      els.statusPill.classList.add("offline");
+      els.statusText.textContent = "Container Stopped";
+      els.sendBtn.disabled = true;
+      els.testBtn.disabled = true;
+      els.shutdownBtn.disabled = true;
+      els.promptInput.disabled = true;
+      els.promptInput.placeholder = "Poseidon container stopped. You can safely close this tab.";
+    }
+
+    async function shutdownContainer() {
+      if (shuttingDown) return;
+      markShuttingDown();
+      appendCard(
+        "cmd-card",
+        "Poseidon Stopped",
+        `<div class="md"><p>Session saved and Docker container shut down cleanly. You can close this browser tab.</p></div>`,
+        `<span class="pill-fail">STOPPED</span>`
+      );
+      try { await fetch("/api/shutdown", { method: "POST" }); } catch (_e) {}
+    }
+
+    function connectWebSocket() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.onopen = () => {
+        els.statusPill.classList.remove("offline");
+        els.statusText.textContent = "CLI Connected";
+      };
+      ws.onclose = () => {
+        els.statusPill.classList.add("offline");
+        if (shuttingDown) {
+          els.statusText.textContent = "Container Stopped";
+          setBusy(false);
+          return;
+        }
+        els.statusText.textContent = "Reconnecting";
+        setBusy(false);
+        setTimeout(connectWebSocket, 1800);
+      };
+      ws.onmessage = (evt) => {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === "connected" || msg.type === "state_update") {
+          applyState(msg.state);
+          if (
+            msg.type === "connected" &&
+            Array.isArray(msg.messages) &&
+            msg.messages.length &&
+            els.stream.querySelectorAll(".card").length === 0
+          ) {
+            hideWelcome();
+            msg.messages.forEach((m) => {
+              appendCard(
+                m.role === "user" ? "user" : "assistant",
+                m.role === "user" ? "You" : "Poseidon",
+                `<div class="md">${renderMarkdown(m.content)}</div>`
+              );
+            });
+          }
+          if (msg.type === "state_update") setBusy(false);
+        } else if (msg.type === "command_result") {
+          setBusy(false);
+          if (msg.result && msg.result.state) applyState(msg.result.state);
+          appendCommandResult(msg.result);
+          if (msg.result && msg.result.shutdown) markShuttingDown();
+        } else if (msg.type === "model_call") {
+          if (liveStatusEl) {
+            const tag = msg.plan_mode ? " (plan)" : "";
+            liveStatusEl.innerHTML = `<span class="spinner"></span><span>Model call ${msg.call_index}/${msg.max_calls}${tag} &middot; <span class="mono">${esc(msg.model)}</span></span>`;
+          }
+        } else if (msg.type === "tool_result") {
+          const ev = msg.event;
+          appendStep(ev.ok ? "badge-ok" : "badge-err", ev.ok ? "✓" : "×", ev.tool_name, ev.summary);
+          if (liveStatusEl) els.stream.appendChild(liveStatusEl);
+        } else if (msg.type === "diff_approval_request") {
+          appendDiffApproval(msg.approval_id, msg.diff);
+        } else if (msg.type === "diff_auto_applied") {
+          appendCard("diff-card", "Auto-Applied Unified Diff", `<div class="diff-pre">${renderDiffHtml(msg.diff)}</div>`);
+        } else if (msg.type === "test_result") {
+          appendTestCard(msg.result);
+        } else if (msg.type === "run_complete") {
+          setBusy(false);
+          applyState(msg.state);
+          const r = msg.result;
+          const usage = r.usage || {};
+          const cost = typeof usage.cost_usd === "number" ? `$${usage.cost_usd.toFixed(4)}` : "$0.0000";
+          const masked = r.estimated_tokens_saved > 0 ? `<span>Masked: ~${r.estimated_tokens_saved} tok</span>` : "";
+          appendCard(
+            "assistant",
+            "Poseidon",
+            `
+              <div class="md">${renderMarkdown(r.final_response || "(Done)")}</div>
+              <div class="run-footer">
+                <span>Calls: ${r.calls_made}/${r.max_calls}</span>
+                <span>Tokens: ${usage.total_tokens ?? "n/a"}</span>
+                <span>Elapsed: ${Number(r.elapsed_seconds || 0).toFixed(2)}s</span>
+                <span>Cost: ${cost}</span>
+                ${masked}
+              </div>
+            `
+          );
+        } else if (msg.type === "goal_started") {
+          els.goalBanner.classList.add("active");
+          els.goalBannerText.textContent = `Goal (0/${msg.max_iterations}): ${msg.objective}`;
+        } else if (msg.type === "goal_plan") {
+          appendCard(
+            "cmd-card",
+            "Goal Plan (Read-Only Pass)",
+            `<div class="md">${renderMarkdown(msg.plan || "")}</div>`,
+            `<span class="pill-tag">PLAN</span>`
+          );
+        } else if (msg.type === "goal_iteration_start") {
+          els.goalBannerText.textContent = `Goal Iteration ${msg.iteration}/${msg.max_iterations} running...`;
+          appendStep("badge-ok", "▶", `goal ${msg.iteration}/${msg.max_iterations}`, "Executing & verifying next milestone...");
+        } else if (msg.type === "goal_iteration_complete") {
+          const rec = msg.record || {};
+          const ok = rec.status_signal === "COMPLETE";
+          appendStep(
+            ok ? "badge-ok" : "badge-err",
+            ok ? "✓" : "→",
+            `iteration ${rec.iteration}`,
+            `${rec.status_signal} · ${rec.calls_made} calls · ${Number(rec.elapsed_seconds || 0).toFixed(1)}s`
+          );
+        } else if (msg.type === "goal_complete") {
+          els.goalBanner.classList.remove("active");
+          setBusy(false);
+          applyState(msg.state);
+          const g = msg.result || {};
+          const pill = g.completed ? `<span class="pill-pass">ACHIEVED</span>` : `<span class="pill-fail">STOPPED</span>`;
+          appendCard(
+            g.completed ? "test-card pass" : "cmd-card",
+            `Goal Summary — ${g.stop_reason || ""}`,
+            `
+              <div class="md">${renderMarkdown(g.final_summary || g.stop_reason || "")}</div>
+              <div class="run-footer">
+                <span>Iterations: ${g.iterations_run}/${g.max_iterations}</span>
+                <span>Total Calls: ${g.total_calls}</span>
+                <span>Tokens: ${g.total_tokens}</span>
+                <span>Elapsed: ${Number(g.elapsed_seconds || 0).toFixed(2)}s</span>
+                <span>Cost: $${Number(g.total_cost_usd || 0).toFixed(4)}</span>
+              </div>
+            `,
+            pill
+          );
+        } else if (msg.type === "error") {
+          els.goalBanner.classList.remove("active");
+          setBusy(false);
+          appendCard("error", "Error", `<p>${esc(msg.message)}</p>`);
+        }
+      };
+    }
+
+    // ── Event bindings ──────────────────────────────────────────────────────
+    els.modelSelect.onchange = () => updateSettings({ model: els.modelSelect.value });
+    els.modeSelect.onchange = () => updateSettings({ mode: els.modeSelect.value });
+    els.planBtn.onclick = () => updateSettings({ plan_mode: !state.plan_mode });
+    els.autoBtn.onclick = () => updateSettings({ auto_approve: !state.auto_approve });
+    els.toolsBtn.onclick = () => openToolsDrawer();
+    els.settingsBtn.onclick = () => openSettingsDrawer("general");
+    els.cancelGoalBtn.onclick = async () => {
+      els.cancelGoalBtn.disabled = true;
+      els.goalBannerText.textContent = "Cancelling goal after current step...";
+      try { await fetch("/api/goal/cancel", { method: "POST" }); } catch (_e) {}
+      setTimeout(() => { els.cancelGoalBtn.disabled = false; }, 1200);
+    };
+    els.testBtn.onclick = () => sendPrompt("/test");
+    els.shutdownBtn.onclick = () => shutdownContainer();
+    els.compactBtn.onclick = () => sendPrompt("/compact");
+    els.undoBtn.onclick = () => sendPrompt("/undo");
+    els.saveBtn.onclick = () => sendPrompt("/save");
+    els.newSessionBtn.onclick = () => sendPrompt("/clear");
+
+    els.closeDrawerBtn.onclick = () => els.drawer.classList.remove("open");
+    els.copyDrawerBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(lastDrawerRawText);
+        els.copyDrawerBtn.textContent = "Copied!";
+        setTimeout(() => (els.copyDrawerBtn.textContent = "Copy"), 1200);
+      } catch (_e) {}
+    };
+
+    els.cancelDeleteBtn.onclick = closeDeleteModal;
+    els.confirmDeleteBtn.onclick = confirmDeleteSession;
+    els.deleteModal.onclick = (e) => { if (e.target === els.deleteModal) closeDeleteModal(); };
+    els.closeSettingsModalBtn.onclick = closeSettingsModal;
+    els.settingsModal.onclick = (e) => { if (e.target === els.settingsModal) closeSettingsModal(); };
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && els.deleteModal.classList.contains("open")) closeDeleteModal();
+      if (e.key === "Escape" && els.settingsModal.classList.contains("open")) closeSettingsModal();
+    });
+
+    els.slashToggleBtn.onclick = () => {
+      if (els.slashMenu.classList.contains("open")) {
+        closeSlashMenu();
+      } else {
+        if (!els.promptInput.value.startsWith("/")) els.promptInput.value = "/";
+        els.promptInput.focus();
+        updateSlashMenu(true);
+      }
+    };
+
+    els.sendBtn.onclick = () => sendPrompt();
+    els.promptInput.oninput = () => {
+      els.promptInput.style.height = "auto";
+      els.promptInput.style.height = `${Math.min(els.promptInput.scrollHeight, 150)}px`;
+      updateSlashMenu(false);
+    };
+    els.promptInput.onkeydown = (e) => {
+      if (els.slashMenu.classList.contains("open") && slashMatches.length) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          slashSelectedIdx = (slashSelectedIdx + 1) % slashMatches.length;
+          updateSlashMenu(true);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          slashSelectedIdx = (slashSelectedIdx - 1 + slashMatches.length) % slashMatches.length;
+          updateSlashMenu(true);
+          return;
+        }
+        if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+          e.preventDefault();
+          pickSlashCommand(slashSelectedIdx);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeSlashMenu();
+          return;
+        }
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendPrompt();
+      }
+    };
+
+    document.querySelectorAll(".quick-chip").forEach((chip) => {
+      chip.onclick = () => sendPrompt(chip.dataset.prompt);
+    });
+
+    connectWebSocket();
+  </script>
+</body>
+</html>
