@@ -18,7 +18,9 @@ from poseidon.cli.banner import render_banner
 from poseidon.config import RECOMMENDED_MODELS, Settings
 from poseidon.context.checkpoints import WorkspaceCheckpointManager
 from poseidon.context.compactor import compact_messages
-from poseidon.core.agent import AgentRunResult, ToolEvent, run_agent_loop
+from poseidon.context.memory import load_project_memory, starter_poseidon_md
+from poseidon.context.sessions import SessionStore, generate_session_id
+from poseidon.core.agent import AgentRunResult, ToolEvent, build_system_prompt, run_agent_loop
 from poseidon.core.benchmark_m2 import (
     DEFAULT_BENCHMARK_PROMPT,
     BenchmarkRow,
@@ -48,8 +50,8 @@ from poseidon.workspace import WorkspaceGuard, WorkspaceSecurityError
 
 app = typer.Typer(
     name="poseidon",
-    help=f"{APP_NAME} — Modular Python coding agent harness.",
-    no_args_is_help=True,
+    help=f"{APP_NAME} — Modular Python coding agent harness. Run bare `poseidon` to chat.",
+    no_args_is_help=False,
     rich_markup_mode="rich",
 )
 console = Console()
@@ -294,6 +296,7 @@ def _run_agent_with_ui(
     checkpoints: WorkspaceCheckpointManager | None = None,
     conversation_history: list[dict[str, Any]] | None = None,
     tracer: PoseidonTracer | None = None,
+    plan_mode: bool = False,
 ) -> AgentRunResult:
     """Execute the native tool-calling agent with live progress, diff preview, and Docker tests."""
     registry = ToolRegistry()
@@ -320,10 +323,17 @@ def _run_agent_with_ui(
         semantic_index=semantic_index,
         checkpoints=checkpoints,
         protect_tests=True,
+        read_only=plan_mode,
     )
 
+    memory = load_project_memory(workspace.root)
+    sys_prompt = build_system_prompt(project_memory=memory.content, plan_mode=plan_mode)
+    if conversation_history and conversation_history[0].get("role") == "system":
+        conversation_history[0]["content"] = sys_prompt
+
     def _on_model_call(call_num: int, limit: int) -> None:
-        console.print(f"[dim]→ Model call {call_num}/{limit} ({model})...[/dim]")
+        tag = " (plan)" if plan_mode else ""
+        console.print(f"[dim]→ Model call {call_num}/{limit}{tag} ({model})...[/dim]")
 
     def _on_tool_result(event: ToolEvent) -> None:
         icon = "[green]✓[/green]" if event.ok else "[red]✗[/red]"
@@ -347,6 +357,7 @@ def _run_agent_with_ui(
         tool_state=state,
         test_runner=test_runner,
         on_test_result=_render_test_result,
+        system_prompt=sys_prompt,
     )
 
 
@@ -486,6 +497,55 @@ def _render_model_comparison(rows: list[ModelComparisonRow]) -> None:
         )
 
 
+@app.callback(invoke_without_command=True)
+def root_callback(
+    ctx: typer.Context,
+    workspace: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Project workspace folder (defaults to current)."),
+    ] = Path("."),
+    model: Annotated[
+        str | None,
+        typer.Option("--model", "-m", help="OpenRouter model ID."),
+    ] = None,
+    plan: Annotated[
+        bool,
+        typer.Option("--plan", help="Start in read-only Plan Mode (write tools disabled)."),
+    ] = False,
+    continue_last: Annotated[
+        bool,
+        typer.Option("--continue", "-c", help="Resume the most recent saved session."),
+    ] = False,
+    resume: Annotated[
+        str | None,
+        typer.Option("--resume", help="Resume a specific saved session ID."),
+    ] = None,
+    max_calls: Annotated[
+        int | None,
+        typer.Option("--max-calls", help="Maximum model calls allowed per request."),
+    ] = None,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Auto-approve diff patches without prompting."),
+    ] = False,
+) -> None:
+    """Launch Poseidon-CLI interactively on the current project when run with no subcommand."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _start_interactive_session(
+        workspace=workspace,
+        model=model,
+        mode="agent",
+        max_calls=max_calls,
+        test_timeout=None,
+        yes=yes,
+        plan=plan,
+        continue_last=continue_last,
+        resume=resume,
+        prompt_for_model=False,
+    )
+
+
 @app.command()
 def version() -> None:
     """Print the Poseidon-CLI version."""
@@ -587,6 +647,10 @@ def run(
         bool,
         typer.Option("--yes", "-y", help="Auto-approve diff patches without prompting."),
     ] = False,
+    plan: Annotated[
+        bool,
+        typer.Option("--plan", help="Read-only Plan Mode (explore & plan without editing files)."),
+    ] = False,
     no_code: Annotated[
         bool,
         typer.Option("--no-code", help="Suppress printing full source code in whole-file mode."),
@@ -608,7 +672,14 @@ def run(
         console.print(f"[bold red]Workspace error:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    render_banner(console, model=chosen_model, workspace=guard.root)
+    memory = load_project_memory(guard.root)
+    render_banner(
+        console,
+        model=chosen_model,
+        workspace=guard.root,
+        plan_mode=plan,
+        memory_sources=memory.sources,
+    )
 
     with OpenRouterClient(settings) as client:
         try:
@@ -625,6 +696,7 @@ def run(
                     max_calls=call_limit,
                     test_timeout=effective_timeout,
                     auto_approve=yes,
+                    plan_mode=plan,
                 )
                 _render_agent_result(agent_res)
             elif mode == "diff":
@@ -986,12 +1058,53 @@ def chat(
         bool,
         typer.Option("--yes", "-y", help="Auto-approve diff patches without prompting."),
     ] = False,
+    plan: Annotated[
+        bool,
+        typer.Option("--plan", help="Start in read-only Plan Mode (write tools disabled)."),
+    ] = False,
+    continue_last: Annotated[
+        bool,
+        typer.Option("--continue", "-c", help="Resume the most recent saved session."),
+    ] = False,
+    resume: Annotated[
+        str | None,
+        typer.Option("--resume", help="Resume a specific saved session ID."),
+    ] = None,
 ) -> None:
     """Start an interactive Poseidon-CLI session inside a workspace."""
+    _start_interactive_session(
+        workspace=workspace,
+        model=model,
+        mode=mode,
+        max_calls=max_calls,
+        test_timeout=test_timeout,
+        yes=yes,
+        plan=plan,
+        continue_last=continue_last,
+        resume=resume,
+        prompt_for_model=(model is None),
+    )
+
+
+def _start_interactive_session(
+    *,
+    workspace: Path,
+    model: str | None,
+    mode: str,
+    max_calls: int | None,
+    test_timeout: int | None,
+    yes: bool,
+    plan: bool,
+    continue_last: bool,
+    resume: str | None,
+    prompt_for_model: bool,
+) -> None:
+    """Shared interactive REPL used by both bare `poseidon` and `poseidon chat`."""
     settings = Settings()
     call_limit = max_calls if max_calls is not None else settings.default_max_calls
     effective_timeout = test_timeout if test_timeout is not None else settings.default_test_timeout
     auto_approve = yes
+    plan_mode = plan
 
     try:
         guard = WorkspaceGuard(workspace)
@@ -999,29 +1112,67 @@ def chat(
         console.print(f"[bold red]Workspace error:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    chosen_model = model or _select_model_interactive(settings.default_model)
+    session_store = SessionStore(guard.root)
+    session_id = generate_session_id()
+    history: list[dict[str, Any]] = []
+    chosen_model = model or (
+        _select_model_interactive(settings.default_model)
+        if prompt_for_model
+        else settings.default_model
+    )
+
+    # Restore previous JSONL session if --resume or --continue was requested
+    target_resume_id = resume or (session_store.latest_session_id() if continue_last else None)
+    if target_resume_id:
+        try:
+            loaded = session_store.load(target_resume_id)
+            session_id = loaded.summary.session_id
+            history = loaded.messages
+            if model is None and loaded.summary.model != "unknown":
+                chosen_model = loaded.summary.model
+            if not plan:
+                plan_mode = loaded.summary.plan_mode
+            console.print(
+                f"[green]↺ Resumed session[/green] [cyan]{session_id}[/cyan] "
+                f"({loaded.summary.message_count} messages)"
+            )
+        except FileNotFoundError as exc:
+            console.print(f"[yellow]{exc}. Starting a fresh session instead.[/yellow]")
+
     tool_state = ToolSessionState()
     checkpoints = WorkspaceCheckpointManager(guard)
-    history: list[dict[str, Any]] = []
     tracer = PoseidonTracer(settings)
 
     with OpenRouterClient(settings) as client:
         if mode == "agent":
             chosen_model = _validate_or_reselect_model(client, chosen_model, interactive=True)
 
-        render_banner(console, model=chosen_model, workspace=guard.root)
+        memory = load_project_memory(guard.root)
+        render_banner(
+            console,
+            model=chosen_model,
+            workspace=guard.root,
+            plan_mode=plan_mode,
+            memory_sources=memory.sources,
+            session_id=session_id,
+        )
         console.print(
             f"[dim]Mode: {mode} | Max calls: {call_limit} | Test timeout: {effective_timeout}s | "
             f"Auto-edit: {auto_approve}[/dim]"
         )
         console.print(
-            "[dim]Commands: /compact, /undo, /checkpoints, /test, /model, "
-            "/limit <n>, /timeout <s>, /auto <on|off>, /mode, /files, /exit[/dim]\n"
+            "[dim]Commands: /plan, /compact, /undo, /checkpoints, /save, /resume, /sessions, "
+            "/memory, /init, /test, /model, /limit, /auto, /clear, /files, /exit[/dim]\n"
         )
 
         while True:
+            prompt_label = (
+                "[bold magenta]poseidon (plan)>[/bold magenta]"
+                if plan_mode
+                else "[bold cyan]poseidon>[/bold cyan]"
+            )
             try:
-                user_input = Prompt.ask("[bold cyan]poseidon>[/bold cyan]").strip()
+                user_input = Prompt.ask(prompt_label).strip()
             except (EOFError, KeyboardInterrupt):
                 console.print("\n[dim]Goodbye.[/dim]")
                 break
@@ -1035,6 +1186,101 @@ def chat(
                 files = guard.list_files()
                 console.print(
                     f"[yellow]Workspace files:[/yellow] {', '.join(files) if files else '(empty)'}"
+                )
+                continue
+            if user_input == "/plan":
+                plan_mode = not plan_mode
+                status_text = (
+                    "[bold magenta]ON (read-only; write tools disabled)[/bold magenta]"
+                    if plan_mode
+                    else "[bold green]OFF (edit tools enabled)[/bold green]"
+                )
+                console.print(f"Plan Mode: {status_text}")
+                continue
+            if user_input == "/memory":
+                memory = load_project_memory(guard.root)
+                if memory.sources:
+                    console.print(
+                        f"[cyan]Loaded project memory:[/cyan] {', '.join(memory.sources)} "
+                        f"({len(memory.content)} chars)"
+                    )
+                else:
+                    console.print(
+                        "[dim]No POSEIDON.md or AGENTS.md found. Run `/init` to create one.[/dim]"
+                    )
+                continue
+            if user_input == "/init":
+                target = guard.root / "POSEIDON.md"
+                if target.exists():
+                    console.print("[yellow]POSEIDON.md already exists in this workspace.[/yellow]")
+                else:
+                    guard.write_text("POSEIDON.md", starter_poseidon_md(guard.root.name))
+                    console.print("[green]✓ Created POSEIDON.md in workspace.[/green]")
+                continue
+            if user_input == "/sessions":
+                saved = session_store.list_sessions()
+                if not saved:
+                    console.print("[dim]No saved sessions in this workspace yet.[/dim]")
+                else:
+                    tbl = Table(title="Saved Sessions", border_style="cyan")
+                    tbl.add_column("Session ID", style="cyan")
+                    tbl.add_column("Messages", justify="right")
+                    tbl.add_column("Model", style="green")
+                    tbl.add_column("Updated", style="dim")
+                    tbl.add_column("Title", style="white")
+                    for s in saved[:15]:
+                        tbl.add_row(
+                            s.session_id,
+                            str(s.message_count),
+                            s.model,
+                            s.updated_at,
+                            s.title,
+                        )
+                    console.print(tbl)
+                continue
+            if user_input.startswith("/save"):
+                parts = user_input.split(maxsplit=1)
+                custom_id = parts[1].strip() if len(parts) == 2 else session_id
+                try:
+                    saved_meta = session_store.save(
+                        session_id=custom_id,
+                        model=chosen_model,
+                        messages=history,
+                        plan_mode=plan_mode,
+                    )
+                    session_id = saved_meta.session_id
+                    console.print(
+                        f"[green]✓ Saved session[/green] [cyan]{saved_meta.session_id}[/cyan] "
+                        f"({saved_meta.message_count} messages)"
+                    )
+                except ValueError as exc:
+                    console.print(f"[red]Save failed:[/red] {exc}")
+                continue
+            if user_input.startswith("/resume"):
+                parts = user_input.split(maxsplit=1)
+                target_id = (
+                    parts[1].strip() if len(parts) == 2 else session_store.latest_session_id()
+                )
+                if not target_id:
+                    console.print("[yellow]No saved sessions to resume.[/yellow]")
+                    continue
+                try:
+                    loaded = session_store.load(target_id)
+                    session_id = loaded.summary.session_id
+                    history = loaded.messages
+                    plan_mode = loaded.summary.plan_mode
+                    console.print(
+                        f"[green]↺ Resumed session[/green] [cyan]{session_id}[/cyan] "
+                        f"({loaded.summary.message_count} messages)"
+                    )
+                except (FileNotFoundError, ValueError) as exc:
+                    console.print(f"[red]Resume failed:[/red] {exc}")
+                continue
+            if user_input == "/clear":
+                history.clear()
+                session_id = generate_session_id()
+                console.print(
+                    f"[green]✓ Cleared history. New session:[/green] [cyan]{session_id}[/cyan]"
                 )
                 continue
             if user_input == "/compact":
@@ -1135,8 +1381,16 @@ def chat(
                         checkpoints=checkpoints,
                         conversation_history=history,
                         tracer=tracer,
+                        plan_mode=plan_mode,
                     )
                     _render_agent_result(agent_res)
+                    # Auto-save session cleanly after every completed turn
+                    session_store.save(
+                        session_id=session_id,
+                        model=chosen_model,
+                        messages=history,
+                        plan_mode=plan_mode,
+                    )
                 elif mode == "diff":
                     existing_files = guard.list_files()
                     if not existing_files:

@@ -63,6 +63,7 @@ def register_core_tools(
     semantic_index: SemanticCodeIndex | None = None,
     checkpoints: WorkspaceCheckpointManager | None = None,
     protect_tests: bool = True,
+    read_only: bool = False,
 ) -> None:
     """Register all built-in workspace tools strictly sandboxed to the workspace."""
 
@@ -391,58 +392,59 @@ def register_core_tools(
         )
     )
 
-    registry.register(
-        ToolDefinition(
-            name="create_file",
-            description=(
-                "Create a brand-new source file inside the workspace. Fails if the file already "
-                "exists (use apply_diff for existing files)."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Relative path for the new file inside the workspace.",
+    if not read_only:
+        registry.register(
+            ToolDefinition(
+                name="create_file",
+                description=(
+                    "Create a brand-new source file inside the workspace. Fails if the file "
+                    "already exists (use apply_diff for existing files)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Relative path for the new file inside the workspace.",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Complete UTF-8 source text for the new file.",
+                        },
                     },
-                    "content": {
-                        "type": "string",
-                        "description": "Complete UTF-8 source text for the new file.",
-                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": False,
                 },
-                "required": ["path", "content"],
-                "additionalProperties": False,
-            },
-            handler=handle_create_file,
+                handler=handle_create_file,
+            )
         )
-    )
 
-    registry.register(
-        ToolDefinition(
-            name="apply_diff",
-            description=(
-                "Apply a Git unified diff to an existing workspace file. "
-                "Requires standard --- a/path, +++ b/path, and @@ hunk headers with exact context. "
-                "The entire patch is validated atomically before writing. "
-                "Unit test files are protected during repair."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "diff": {
-                        "type": "string",
-                        "description": (
-                            "Unified diff string targeting files already read via "
-                            "read_file or read_lines."
-                        ),
-                    }
+        registry.register(
+            ToolDefinition(
+                name="apply_diff",
+                description=(
+                    "Apply a Git unified diff to an existing workspace file. "
+                    "Requires standard --- a/path, +++ b/path, and @@ hunk headers with exact "
+                    "context. The entire patch is validated atomically before writing. "
+                    "Unit test files are protected during repair."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "diff": {
+                            "type": "string",
+                            "description": (
+                                "Unified diff string targeting files already read via "
+                                "read_file or read_lines."
+                            ),
+                        }
+                    },
+                    "required": ["diff"],
+                    "additionalProperties": False,
                 },
-                "required": ["diff"],
-                "additionalProperties": False,
-            },
-            handler=handle_apply_diff,
+                handler=handle_apply_diff,
+            )
         )
-    )
 
     if test_runner is not None:
 

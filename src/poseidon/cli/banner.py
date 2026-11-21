@@ -36,7 +36,15 @@ BANNER_ROWS: list[tuple[str, str]] = [
 ]
 
 
-def render_banner(console: Console, *, model: str, workspace: Path) -> None:
+def render_banner(
+    console: Console,
+    *,
+    model: str,
+    workspace: Path,
+    plan_mode: bool = False,
+    memory_sources: list[str] | None = None,
+    session_id: str | None = None,
+) -> None:
     """Display the Poseidon-CLI banner with gold trident, ocean-cyan title, and active context."""
     title = Text(f"{APP_NAME} v{__version__}", style="bold cyan")
     body = Text()
@@ -50,4 +58,14 @@ def render_banner(console: Console, *, model: str, workspace: Path) -> None:
     body.append(f"{model}\n", style="green")
     body.append("Workspace: ", style="bold white")
     body.append(f"{workspace}", style="yellow")
+    if plan_mode:
+        body.append("\nMode:      ", style="bold white")
+        body.append("PLAN (read-only)", style="bold magenta")
+    if memory_sources:
+        body.append("\nMemory:    ", style="bold white")
+        body.append(", ".join(memory_sources), style="cyan")
+    if session_id:
+        body.append("\nSession:   ", style="bold white")
+        body.append(session_id, style="dim")
+
     console.print(Panel(body, title=title, border_style="bright_blue", expand=False))

@@ -30,6 +30,32 @@ Workflow rules:
 7. Once verified (or no edits needed), give a concise summary and stop calling tools.
 """
 
+PLAN_MODE_DIRECTIVE = """
+PLAN MODE ACTIVE (READ-ONLY):
+- Write tools (`apply_diff`, `create_file`) are disabled. Do NOT attempt to edit files.
+- Explore the codebase using `list_files`, `search_text`, `semantic_search`, `read_lines`,
+  `read_file`, and `run_tests`.
+- Deliver a clear, numbered implementation plan listing:
+  1. Exact files and functions to modify or create
+  2. Concrete behavioral changes and edge cases
+  3. Verification & test strategy
+"""
+
+
+def build_system_prompt(
+    *,
+    base_prompt: str = AGENT_SYSTEM_PROMPT,
+    project_memory: str = "",
+    plan_mode: bool = False,
+) -> str:
+    """Compose the static top system prompt with optional project memory and plan-mode rules."""
+    parts = [base_prompt.strip()]
+    if project_memory.strip():
+        parts.append("## Project Memory (from repository rules)\n\n" + project_memory.strip())
+    if plan_mode:
+        parts.append(PLAN_MODE_DIRECTIVE.strip())
+    return "\n\n".join(parts)
+
 
 class ToolCapableClient(Protocol):
     """Protocol for an LLM client supporting OpenRouter native tool calling."""

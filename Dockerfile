@@ -33,4 +33,4 @@ RUN mkdir -p /workspace /home/poseidon/.cache/fastembed \
 USER poseidon
 
 ENTRYPOINT ["poseidon"]
-CMD ["--help"]
+CMD []
