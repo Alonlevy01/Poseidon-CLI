@@ -1,0 +1,35 @@
+# Secrets & environment
+.env
+.env.*
+!.env.example
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local harness caches & model weights
+.poseidon/
+.poseidon_cache/
+*.faiss
+*.index
+*.onnx
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

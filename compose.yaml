@@ -1,0 +1,15 @@
+services:
+  poseidon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: poseidon-cli:dev
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./demo_workspace:/workspace
+      - ./tests:/app/tests:ro
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
