@@ -420,15 +420,32 @@ class _WebSocketBridge:
         self._pending.clear()
 
 
-def _visible_transcript(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
-    return [
-        {
-            "role": str(m.get("role") or ""),
-            "content": str(m.get("content") or ""),
-        }
-        for m in messages
-        if m.get("role") in ("user", "assistant") and str(m.get("content") or "").strip()
-    ]
+def _visible_transcript(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    visible: list[dict[str, Any]] = []
+    for m in messages:
+        role = str(m.get("role") or "")
+        if role not in ("user", "assistant"):
+            continue
+        raw = m.get("content")
+        if isinstance(raw, list):
+            texts = [
+                str(p.get("text") or "")
+                for p in raw
+                if isinstance(p, dict) and p.get("type") == "text"
+            ]
+            imgs = [
+                str((p.get("image_url") or {}).get("url") or "")
+                for p in raw
+                if isinstance(p, dict) and p.get("type") == "image_url"
+            ]
+            joined = "\n".join(t for t in texts if t.strip()).strip()
+            if joined or imgs:
+                visible.append({"role": role, "content": joined, "images": imgs})
+        else:
+            text = str(raw or "")
+            if text.strip():
+                visible.append({"role": role, "content": text})
+    return visible
 
 
 def _execute_slash_command(ctx: WebSessionContext, raw_command: str) -> dict[str, Any]:
@@ -1750,7 +1767,11 @@ def create_web_app(
             }
         )
 
-    def _run_prompt_in_thread(prompt: str, bridge: _WebSocketBridge) -> None:
+    def _run_prompt_in_thread(
+        prompt: str,
+        bridge: _WebSocketBridge,
+        attached_images: list[dict[str, str]] | None = None,
+    ) -> None:
         if not ctx.run_lock.acquire(blocking=False):
             bridge.emit({"type": "error", "message": "Another run is already in progress."})
             return
@@ -1954,7 +1975,7 @@ def create_web_app(
                         _trigger_shutdown(0.15)
                     return
 
-            # Expand safe `@file` mentions so the model gets grounded file context immediately
+            # Expand safe `@file` (text + image) mentions and merge attached screenshots
             mention_res = expand_file_mentions(prompt, ctx.workspace, ctx.tool_state)
             if mention_res.loaded_files:
                 prompt = mention_res.expanded_prompt
@@ -1970,6 +1991,10 @@ def create_web_app(
                         },
                     }
                 )
+            all_images: list[dict[str, str]] = [
+                *(attached_images or []),
+                *mention_res.images,
+            ][:4]
 
             with OpenRouterClient(
                 ctx.settings,
@@ -2073,6 +2098,7 @@ def create_web_app(
                         test_runner=test_runner,
                         on_test_result=_on_test,
                         system_prompt=sys_prompt,
+                        user_images=all_images or None,
                     )
                     ctx.record_usage(
                         prompt_tokens=res.usage.prompt_tokens,
@@ -2225,11 +2251,23 @@ def create_web_app(
                 msg_type = msg.get("type")
                 if msg_type == "prompt":
                     prompt_text = str(msg.get("prompt") or "").strip()
-                    if not prompt_text:
+                    raw_imgs = msg.get("images") or []
+                    clean_imgs: list[dict[str, str]] = [
+                        {
+                            "name": str(im.get("name") or "screenshot.png")[:64],
+                            "data_url": str(im.get("data_url") or ""),
+                        }
+                        for im in raw_imgs[:4]
+                        if isinstance(im, dict)
+                        and str(im.get("data_url") or "").startswith("data:image/")
+                    ]
+                    if not prompt_text and not clean_imgs:
                         continue
+                    if not prompt_text and clean_imgs:
+                        prompt_text = "Describe and analyze the attached screenshot(s)."
                     worker = threading.Thread(
                         target=_run_prompt_in_thread,
-                        args=(prompt_text, bridge),
+                        args=(prompt_text, bridge, clean_imgs),
                         daemon=True,
                     )
                     worker.start()

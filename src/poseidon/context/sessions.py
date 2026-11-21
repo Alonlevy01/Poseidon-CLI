@@ -177,7 +177,17 @@ class SessionStore:
 def _derive_title(messages: list[dict[str, Any]]) -> str:
     for msg in messages:
         if msg.get("role") == "user":
-            text = str(msg.get("content") or "").strip().splitlines()[0]
-            if text:
-                return text[:60] + ("..." if len(text) > 60 else "")
+            raw_content = msg.get("content")
+            if isinstance(raw_content, list):
+                text_parts = [
+                    str(p.get("text") or "")
+                    for p in raw_content
+                    if isinstance(p, dict) and p.get("type") == "text"
+                ]
+                raw_text = " ".join(text_parts).strip() or "[image prompt]"
+            else:
+                raw_text = str(raw_content or "").strip()
+            if raw_text:
+                first_line = raw_text.splitlines()[0]
+                return first_line[:60] + ("..." if len(first_line) > 60 else "")
     return ""

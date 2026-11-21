@@ -697,6 +697,52 @@
     }
     .composer textarea::placeholder { color: var(--text-dim); }
 
+    .attach-bar {
+      display: none;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .attach-bar.has-items { display: flex; }
+    .attach-thumb {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px 4px 4px;
+      border-radius: 9px;
+      background: rgba(8, 22, 36, 0.9);
+      border: 1px solid rgba(56, 232, 255, 0.34);
+      font-size: 11px;
+      color: var(--cyan-soft);
+    }
+    .attach-thumb img {
+      width: 34px;
+      height: 34px;
+      object-fit: cover;
+      border-radius: 6px;
+    }
+    .attach-rm {
+      border: none;
+      background: transparent;
+      color: #fda4af;
+      cursor: pointer;
+      font-weight: 700;
+      padding: 0 3px;
+    }
+    .msg-thumbs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .msg-thumbs img {
+      max-width: 180px;
+      max-height: 120px;
+      border-radius: 8px;
+      border: 1px solid rgba(56, 232, 255, 0.32);
+    }
+
     .composer-controls {
       margin-top: 9px;
       display: flex;
@@ -1157,13 +1203,16 @@
       <!-- Elevated Composer + Under-Bar Controls -->
       <div class="composer-wrap">
         <div id="slashMenu" class="slash-menu" role="listbox" aria-label="Slash commands"></div>
+        <div id="attachBar" class="attach-bar"></div>
+        <input id="imageFileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none;" />
 
         <div class="composer">
           <button id="slashToggleBtn" class="btn btn-sm mono" title="Browse all /commands" style="color:var(--cyan);">/</button>
+          <button id="attachImgBtn" class="btn btn-sm" title="Attach screenshot/image (or paste with Ctrl+V)">&#x1F4CE;</button>
           <textarea
             id="promptInput"
             rows="1"
-            placeholder="Ask Poseidon to inspect, edit, or test — or type / for any terminal command..."
+            placeholder="Ask Poseidon, paste a screenshot (Ctrl+V), or type / for commands..."
           ></textarea>
           <button id="sendBtn" class="btn btn-primary">Send</button>
         </div>
@@ -1284,6 +1333,9 @@
       promptInput: document.getElementById("promptInput"),
       sendBtn: document.getElementById("sendBtn"),
       slashToggleBtn: document.getElementById("slashToggleBtn"),
+      attachImgBtn: document.getElementById("attachImgBtn"),
+      imageFileInput: document.getElementById("imageFileInput"),
+      attachBar: document.getElementById("attachBar"),
       slashMenu: document.getElementById("slashMenu"),
       workspaceLabel: document.getElementById("workspaceLabel"),
       drawer: document.getElementById("drawer"),
@@ -2439,22 +2491,72 @@
       if (it) it.run();
     }
 
+    // ── Screenshot / Image Attachments (Ctrl+V paste + file picker) ─────────
+    let pendingImages = [];
+
+    function renderAttachBar() {
+      els.attachBar.classList.toggle("has-items", pendingImages.length > 0);
+      els.attachBar.innerHTML = pendingImages
+        .map(
+          (img, idx) => `
+          <div class="attach-thumb">
+            <img src="${img.data_url}" alt="${esc(img.name)}" />
+            <span class="mono truncate" style="max-width:130px;">${esc(img.name)}</span>
+            <button class="attach-rm" data-rm-img="${idx}" title="Remove">&times;</button>
+          </div>`
+        )
+        .join("");
+      els.attachBar.querySelectorAll("[data-rm-img]").forEach((btn) => {
+        btn.onclick = () => {
+          pendingImages.splice(Number(btn.dataset.rmImg), 1);
+          renderAttachBar();
+        };
+      });
+    }
+
+    function addImageFiles(fileList) {
+      Array.from(fileList || []).forEach((file) => {
+        if (!file.type.startsWith("image/") || file.size > 5 * 1024 * 1024) return;
+        if (pendingImages.length >= 4) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (typeof reader.result === "string" && pendingImages.length < 4) {
+            pendingImages.push({ name: file.name || "screenshot.png", data_url: reader.result });
+            renderAttachBar();
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
     function sendPrompt(explicitText = null) {
       const text = (explicitText !== null ? explicitText : els.promptInput.value).trim();
-      if (!text || busy || shuttingDown || !ws || ws.readyState !== WebSocket.OPEN) return;
-      pushPromptHistory(text);
+      const imgs = explicitText !== null ? [] : [...pendingImages];
+      if ((!text && !imgs.length) || busy || shuttingDown || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (text) pushPromptHistory(text);
       closeSlashMenu();
       els.promptInput.value = "";
       els.promptInput.style.height = "auto";
+      if (imgs.length) {
+        pendingImages = [];
+        renderAttachBar();
+      }
 
-      appendCard("user", text.startsWith("/") ? "Command" : "You", `<div class="md">${renderMarkdown(text)}</div>`);
+      const imgHtml = imgs.length
+        ? `<div class="msg-thumbs">${imgs.map((im) => `<img src="${im.data_url}" alt="${esc(im.name)}" />`).join("")}</div>`
+        : "";
+      appendCard(
+        "user",
+        text.startsWith("/") ? "Command" : "You",
+        `<div class="md">${renderMarkdown(text || "Analyze attached screenshot(s).")}</div>${imgHtml}`
+      );
       setBusy(true);
       liveStatusEl = document.createElement("div");
       liveStatusEl.className = "step-row";
       liveStatusEl.innerHTML = `<span class="spinner"></span><span>${text.startsWith("/") ? `Running ${esc(text)}...` : "Poseidon is thinking..."}</span>`;
       els.stream.appendChild(liveStatusEl);
       scrollBottom();
-      ws.send(JSON.stringify({ type: "prompt", prompt: text }));
+      ws.send(JSON.stringify({ type: "prompt", prompt: text, images: imgs }));
     }
 
     function markShuttingDown() {
@@ -2679,6 +2781,26 @@
         updateSlashMenu(true);
       }
     };
+
+    els.attachImgBtn.onclick = () => els.imageFileInput.click();
+    els.imageFileInput.onchange = () => {
+      addImageFiles(els.imageFileInput.files);
+      els.imageFileInput.value = "";
+    };
+    els.promptInput.addEventListener("paste", (e) => {
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      const imgFiles = [];
+      for (const item of items) {
+        if (item.type && item.type.startsWith("image/")) {
+          const f = item.getAsFile();
+          if (f) imgFiles.push(f);
+        }
+      }
+      if (imgFiles.length) {
+        e.preventDefault();
+        addImageFiles(imgFiles);
+      }
+    });
 
     els.sendBtn.onclick = () => sendPrompt();
     els.promptInput.oninput = () => {

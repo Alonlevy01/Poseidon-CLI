@@ -131,6 +131,7 @@ def run_agent_loop(
     test_runner: TestRunner | None = None,
     on_test_result: Callable[[TestRunResult], None] | None = None,
     system_prompt: str = AGENT_SYSTEM_PROMPT,
+    user_images: list[dict[str, str]] | None = None,
 ) -> AgentRunResult:
     """Run the tool-calling loop with call limits, test verification, and Respan tracing."""
     if max_calls < 1:
@@ -150,7 +151,15 @@ def run_agent_loop(
         else:
             messages = [{"role": "system", "content": system_prompt}]
 
-        messages.append({"role": "user", "content": request})
+        if user_images:
+            user_content: Any = [{"type": "text", "text": request}]
+            for img in user_images:
+                data_url = str(img.get("data_url") or "").strip()
+                if data_url.startswith("data:image/"):
+                    user_content.append({"type": "image_url", "image_url": {"url": data_url}})
+            messages.append({"role": "user", "content": user_content})
+        else:
+            messages.append({"role": "user", "content": request})
 
         tool_schemas = registry.schemas()
         calls_made = 0

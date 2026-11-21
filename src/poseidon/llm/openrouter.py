@@ -486,7 +486,33 @@ def _convert_messages_to_anthropic(
                 system_parts.append(text)
             continue
         if role == "user":
-            out.append({"role": "user", "content": str(msg.get("content") or "")})
+            raw_content = msg.get("content")
+            if isinstance(raw_content, list):
+                user_blocks: list[dict[str, Any]] = []
+                for part in raw_content:
+                    if not isinstance(part, dict):
+                        continue
+                    ptype = part.get("type")
+                    if ptype == "text":
+                        user_blocks.append({"type": "text", "text": str(part.get("text") or "")})
+                    elif ptype == "image_url":
+                        url_str = str((part.get("image_url") or {}).get("url") or "")
+                        if url_str.startswith("data:") and ";base64," in url_str:
+                            header, b64_data = url_str.split(";base64,", 1)
+                            media_type = header[5:] or "image/png"
+                            user_blocks.append(
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": media_type,
+                                        "data": b64_data,
+                                    },
+                                }
+                            )
+                out.append({"role": "user", "content": user_blocks or ""})
+            else:
+                out.append({"role": "user", "content": str(raw_content or "")})
             continue
         if role == "assistant":
             blocks: list[dict[str, Any]] = []

@@ -112,3 +112,33 @@ def test_web_api_doctor_cost_and_custom_commands(
     deleted = client.post("/api/custom-commands/delete", json={"name": "sec", "scope": "global"})
     assert deleted.status_code == 200
     assert not any(c["name"] == "/sec" for c in deleted.json()["state"]["slash_commands"])
+
+
+def test_vision_image_mentions_and_anthropic_translation(tmp_path: Path) -> None:
+    from poseidon.llm.openrouter import _convert_messages_to_anthropic
+
+    # Tiny valid 1x1 PNG header bytes
+    png_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    (tmp_path / "shot.png").write_bytes(png_bytes)
+
+    guard = WorkspaceGuard(tmp_path)
+    res = expand_file_mentions("Check @shot.png for layout bugs", guard)
+    assert len(res.images) == 1
+    assert res.images[0]["mime_type"] == "image/png"
+    assert res.images[0]["data_url"].startswith("data:image/png;base64,")
+
+    _, anth_msgs = _convert_messages_to_anthropic(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Inspect this"},
+                    {"type": "image_url", "image_url": {"url": res.images[0]["data_url"]}},
+                ],
+            }
+        ]
+    )
+    assert anth_msgs[0]["content"][0] == {"type": "text", "text": "Inspect this"}
+    assert anth_msgs[0]["content"][1]["type"] == "image"
+    assert anth_msgs[0]["content"][1]["source"]["media_type"] == "image/png"
+

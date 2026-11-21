@@ -321,6 +321,7 @@ def _run_agent_with_ui(
     plan_mode: bool = False,
     enable_web_tools: bool = True,
     sandbox_image: str | None = None,
+    user_images: list[dict[str, str]] | None = None,
 ) -> AgentRunResult:
     """Execute the native tool-calling agent with live progress, diff preview, and Docker tests."""
     registry = ToolRegistry()
@@ -397,6 +398,7 @@ def _run_agent_with_ui(
             test_runner=test_runner,
             on_test_result=_render_test_result,
             system_prompt=sys_prompt,
+            user_images=user_images,
         )
     finally:
         mcp_manager.close()
@@ -689,6 +691,7 @@ def _run_headless_print(
             plan_mode=plan,
             enable_web_tools=user_cfg.web_tools_enabled,
             sandbox_image=user_cfg.sandbox_image or settings.sandbox_image,
+            user_images=mention.images or None,
         )
 
     if json_output:
@@ -2323,6 +2326,9 @@ def _start_interactive_session(
                     f"[dim]📎 Attached @file context: {', '.join(mention_exp.loaded_files)}[/dim]"
                 )
                 user_input = mention_exp.expanded_prompt
+            if mention_exp.images:
+                img_names = ", ".join(img["name"] for img in mention_exp.images)
+                console.print(f"[dim]🖼 Attached vision image(s): {img_names}[/dim]")
 
             try:
                 if mode == "agent":
@@ -2342,6 +2348,7 @@ def _start_interactive_session(
                         plan_mode=plan_mode,
                         enable_web_tools=web_tools_enabled,
                         sandbox_image=sandbox_image,
+                        user_images=mention_exp.images or None,
                     )
                     sess_turns += 1
                     sess_prompt_tok += agent_res.usage.prompt_tokens or 0
