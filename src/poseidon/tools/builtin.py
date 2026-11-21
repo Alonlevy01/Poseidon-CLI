@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from poseidon.context.checkpoints import WorkspaceCheckpointManager
 from poseidon.indexing.semantic_index import SemanticCodeIndex
 from poseidon.patching.unified_diff import (
     apply_unified_diff,
@@ -60,6 +61,7 @@ def register_core_tools(
     test_runner: TestRunner | None = None,
     on_test_result: Callable[[TestRunResult], None] | None = None,
     semantic_index: SemanticCodeIndex | None = None,
+    checkpoints: WorkspaceCheckpointManager | None = None,
     protect_tests: bool = True,
 ) -> None:
     """Register all built-in workspace tools strictly sandboxed to the workspace."""
@@ -186,6 +188,8 @@ def register_core_tools(
                     summary=f"creation declined ({rel_path})",
                 )
 
+        if checkpoints is not None:
+            checkpoints.capture(label=f"create {rel_path}", target_paths=[rel_path])
         workspace.write_text(rel_path, normalized)
         state.read_hashes[rel_path] = sha256_text(normalized)
         state.dirty_since_last_test = True
@@ -245,6 +249,10 @@ def register_core_tools(
                 output="User declined to apply this patch. Files were left unchanged.",
                 summary="patch declined by user",
             )
+
+        if checkpoints is not None:
+            target_list = [fp.target_path for fp in file_patches]
+            checkpoints.capture(label=f"patch {', '.join(target_list)}", target_paths=target_list)
 
         patch_res = apply_unified_diff(
             workspace=workspace,

@@ -12,6 +12,8 @@ services:
     volumes:
       - ./demo_workspace:/workspace
       - ./tests:/app/tests:ro
+      - ./acceptance_tests:/app/acceptance_tests:ro
+      - ./benchmarks:/app/benchmarks:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - poseidon_model_cache:/home/poseidon/.cache/fastembed
     stdin_open: true

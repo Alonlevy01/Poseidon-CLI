@@ -82,6 +82,41 @@ class OpenRouterClient:
             timeout=settings.request_timeout_seconds,
         )
         self._owns_client = http_client is None
+        self._models_catalog: dict[str, dict[str, Any]] | None = None
+
+    def fetch_models_catalog(self) -> dict[str, dict[str, Any]]:
+        """Fetch and cache the public OpenRouter models catalog (zero API spend)."""
+        if self._models_catalog is not None:
+            return self._models_catalog
+        try:
+            response = self._client.get("/models")
+        except httpx.HTTPError as exc:
+            raise OpenRouterError(f"Could not fetch OpenRouter model catalog: {exc}") from exc
+        if response.status_code >= 400:
+            raise OpenRouterError(
+                f"Failed to fetch OpenRouter model catalog (HTTP {response.status_code})."
+            )
+        items = response.json().get("data") or []
+        self._models_catalog = {
+            str(item["id"]): item for item in items if isinstance(item, dict) and item.get("id")
+        }
+        return self._models_catalog
+
+    def validate_tool_model(self, model_id: str) -> dict[str, Any]:
+        """Verify that model_id exists on OpenRouter and supports native tool calling."""
+        catalog = self.fetch_models_catalog()
+        info = catalog.get(model_id)
+        if info is None:
+            raise ModelToolSupportError(
+                f"Model '{model_id}' is unavailable or not found on OpenRouter."
+            )
+        supported = info.get("supported_parameters") or []
+        if "tools" not in supported:
+            raise ModelToolSupportError(
+                f"Model '{model_id}' does not support native tool calling "
+                f"(supported_parameters={supported})."
+            )
+        return info
 
     def close(self) -> None:
         """Close the underlying HTTP client if owned by this instance."""

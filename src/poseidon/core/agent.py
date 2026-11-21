@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from poseidon.context.compactor import compact_messages
 from poseidon.llm.openrouter import ChatResponse, TokenUsage
 from poseidon.observability.respan import PoseidonTracer
 from poseidon.sandbox.docker_runner import TestRunner, TestRunResult
@@ -66,6 +67,7 @@ class AgentRunResult(BaseModel):
     modified_files: list[str] = Field(default_factory=list)
     last_test_result: TestRunResult | None = None
     edit_verified: bool | None = None
+    estimated_tokens_saved: int = 0
     usage: TokenUsage
     elapsed_seconds: float
     traced_to_respan: bool = False
@@ -135,6 +137,7 @@ def run_agent_loop(
         latest_response: ChatResponse | None = None
         latest_tool_res: ToolExecutionResult | None = None
         latest_auto_test: TestRunResult | None = None
+        total_tokens_saved = 0
 
         def _invoke_model(
             call_number: int,
@@ -201,6 +204,15 @@ def run_agent_loop(
             calls_made += 1
             if on_model_call is not None:
                 on_model_call(calls_made, call_limit)
+
+            # Automatically mask stale bulky tool outputs while keeping recent 4 verbatim
+            _, compact_stats = compact_messages(
+                messages,
+                keep_recent_tool_outputs=4,
+                min_chars_to_mask=600,
+                in_place=True,
+            )
+            total_tokens_saved += compact_stats.estimated_tokens_saved
 
             active_tracer.run_model_call(
                 "openrouter_chat_completion",
@@ -363,6 +375,7 @@ def run_agent_loop(
             modified_files=modified_files,
             last_test_result=state.last_test_result,
             edit_verified=edit_verified,
+            estimated_tokens_saved=total_tokens_saved,
             usage=_merge_usage(usages),
             elapsed_seconds=time.perf_counter() - started,
             traced_to_respan=active_tracer.enabled,

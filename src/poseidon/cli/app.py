@@ -16,6 +16,8 @@ from rich.table import Table
 from poseidon import APP_NAME, __version__
 from poseidon.cli.banner import render_banner
 from poseidon.config import RECOMMENDED_MODELS, Settings
+from poseidon.context.checkpoints import WorkspaceCheckpointManager
+from poseidon.context.compactor import compact_messages
 from poseidon.core.agent import AgentRunResult, ToolEvent, run_agent_loop
 from poseidon.core.benchmark_m2 import (
     DEFAULT_BENCHMARK_PROMPT,
@@ -23,6 +25,11 @@ from poseidon.core.benchmark_m2 import (
     run_whole_vs_diff_benchmark,
 )
 from poseidon.core.benchmark_m6 import SearchBenchmarkReport, run_search_benchmark
+from poseidon.core.benchmark_m7 import (
+    DEFAULT_M5_REQUEST,
+    ModelComparisonRow,
+    run_model_comparison,
+)
 from poseidon.core.diff_edit import DiffEditResult, run_diff_edit_request
 from poseidon.core.single_file import FileExtractionError, SingleFileResult, run_single_file_request
 from poseidon.indexing.semantic_index import FastEmbedProvider, SemanticCodeIndex
@@ -66,6 +73,33 @@ def _select_model_interactive(default_model: str) -> str:
         if 0 <= idx < len(RECOMMENDED_MODELS):
             return RECOMMENDED_MODELS[idx][0]
     return choice or default_model
+
+
+def _validate_or_reselect_model(
+    client: OpenRouterClient,
+    model_id: str,
+    *,
+    interactive: bool,
+) -> str:
+    """Validate that a model exists and supports tool calling; allow re-selection if not."""
+    current = model_id
+    while True:
+        try:
+            client.validate_tool_model(current)
+            return current
+        except ModelToolSupportError as exc:
+            console.print(f"[bold red]Model check failed:[/bold red] {exc}")
+            if not interactive:
+                console.print(
+                    "[yellow]Run `poseidon models` to pick a tool-capable model.[/yellow]"
+                )
+                raise typer.Exit(code=1) from exc
+            console.print("[yellow]Please choose another tool-capable model:[/yellow]")
+            current = _select_model_interactive(RECOMMENDED_MODELS[0][0])
+        except OpenRouterError as exc:
+            # If catalog check fails due to transient network error, warn and continue
+            console.print(f"[yellow]Warning: could not pre-check model catalog ({exc}).[/yellow]")
+            return current
 
 
 def _format_metric(value: int | None) -> str:
@@ -230,6 +264,11 @@ def _render_agent_result(result: AgentRunResult) -> None:
         metrics.add_row("[bold]Edit status:[/bold]", verified_str)
     metrics.add_row("[bold]Output tokens:[/bold]", _format_output_tokens(result.usage))
     metrics.add_row("[bold]Total tokens:[/bold]", _format_metric(result.usage.total_tokens))
+    if result.estimated_tokens_saved > 0:
+        metrics.add_row(
+            "[bold]Context masked:[/bold]",
+            f"~{result.estimated_tokens_saved} tokens saved (observation masking)",
+        )
     metrics.add_row("[bold]Elapsed:[/bold]", f"{result.elapsed_seconds:.2f}s")
     metrics.add_row("[bold]Cost (USD):[/bold]", _format_cost(result.usage.cost_usd))
     trace_label = (
@@ -252,6 +291,7 @@ def _run_agent_with_ui(
     test_timeout: int,
     auto_approve: bool,
     tool_state: ToolSessionState | None = None,
+    checkpoints: WorkspaceCheckpointManager | None = None,
     conversation_history: list[dict[str, Any]] | None = None,
     tracer: PoseidonTracer | None = None,
 ) -> AgentRunResult:
@@ -278,6 +318,7 @@ def _run_agent_with_ui(
         test_runner=test_runner,
         on_test_result=_render_test_result,
         semantic_index=semantic_index,
+        checkpoints=checkpoints,
         protect_tests=True,
     )
 
@@ -408,6 +449,43 @@ def _render_search_benchmark(report: SearchBenchmarkReport) -> None:
     console.print(summary)
 
 
+def _render_model_comparison(rows: list[ModelComparisonRow]) -> None:
+    """Display the Milestone 7 side-by-side model comparison table and run notes."""
+    table = Table(
+        title="Milestone 7 Comparison — Two Model Families + Hidden Acceptance Test",
+        border_style="bright_blue",
+    )
+    table.add_column("Model ID", style="bold cyan", overflow="fold")
+    table.add_column("Visible Tests", style="white", overflow="fold")
+    table.add_column("Acceptance Test", style="white", overflow="fold")
+    table.add_column("Calls", justify="right", no_wrap=True)
+    table.add_column("Elapsed", justify="right", no_wrap=True)
+    table.add_column("Tokens (Out / Total)", justify="right", no_wrap=True)
+    table.add_column("Cost (USD)", justify="right", no_wrap=True)
+
+    for row in rows:
+        vis_style = "bold green" if row.visible_tests_passed else "bold red"
+        acc_style = "bold green" if row.acceptance_passed else "bold red"
+        tok_cell = f"{_format_metric(row.output_tokens)} / {_format_metric(row.total_tokens)}"
+        table.add_row(
+            row.model_id,
+            f"[{vis_style}]{row.visible_tests_summary}[/{vis_style}]",
+            f"[{acc_style}]{row.acceptance_summary}[/{acc_style}]",
+            f"{row.calls_made} / {row.max_calls}",
+            f"{row.elapsed_seconds:.2f}s",
+            tok_cell,
+            _format_cost(row.cost_usd),
+        )
+    console.print(table)
+
+    for row in rows:
+        files_str = ", ".join(row.modified_files) if row.modified_files else "(none)"
+        detail = row.error or row.stop_reason
+        console.print(
+            f"[dim]• {row.model_id} | modified: {files_str} | note: {detail}[/dim]"
+        )
+
+
 @app.command()
 def version() -> None:
     """Print the Poseidon-CLI version."""
@@ -535,6 +613,9 @@ def run(
     with OpenRouterClient(settings) as client:
         try:
             if mode == "agent":
+                chosen_model = _validate_or_reselect_model(
+                    client, chosen_model, interactive=False
+                )
                 agent_res = _run_agent_with_ui(
                     client=client,
                     workspace=guard,
@@ -770,6 +851,104 @@ def benchmark_search(
     _render_search_benchmark(report)
 
 
+@app.command(name="compare-models")
+def compare_models(
+    model_a: Annotated[
+        str | None,
+        typer.Option("--model-a", "-a", help="First tool-capable OpenRouter model ID."),
+    ] = None,
+    model_b: Annotated[
+        str | None,
+        typer.Option("--model-b", "-b", help="Second model ID from a different family."),
+    ] = None,
+    base_workspace: Annotated[
+        Path,
+        typer.Option(
+            "--base-workspace",
+            help="Clean base revision folder copied for each model run.",
+        ),
+    ] = Path("/app/benchmarks/m5_base"),
+    acceptance_test: Annotated[
+        Path,
+        typer.Option(
+            "--acceptance-test",
+            help="Hidden acceptance test file (outside demo_workspace and search index).",
+        ),
+    ] = Path("/app/acceptance_tests/test_exclude_acceptance.py"),
+    max_calls: Annotated[
+        int,
+        typer.Option("--max-calls", help="Identical model-call limit for both models."),
+    ] = 12,
+    test_timeout: Annotated[
+        int,
+        typer.Option("--test-timeout", help="Isolated Docker sandbox test timeout in seconds."),
+    ] = 15,
+    interactive: Annotated[
+        bool,
+        typer.Option("--interactive", "-i", help="Select both models interactively in the CLI."),
+    ] = False,
+) -> None:
+    """Compare two tool-capable models from different families on the Milestone 5 request."""
+    settings = Settings()
+
+    with OpenRouterClient(settings) as client:
+        first_model = (
+            _select_model_interactive("nvidia/nemotron-3.5-super-vl:free")
+            if (interactive or model_a is None)
+            else model_a
+        )
+        first_model = _validate_or_reselect_model(client, first_model, interactive=True)
+
+        second_model = (
+            _select_model_interactive("google/gemma-4-31b-it:free")
+            if (interactive or model_b is None)
+            else model_b
+        )
+        second_model = _validate_or_reselect_model(client, second_model, interactive=True)
+
+        render_banner(
+            console,
+            model=f"{first_model}  vs.  {second_model}",
+            workspace=base_workspace,
+        )
+        console.print(f"[bold]Base revision:[/bold]    [yellow]{base_workspace}[/yellow]")
+        console.print(f"[bold]Acceptance test:[/bold]  [yellow]{acceptance_test}[/yellow]")
+        console.print(f"[bold]Call limit:[/bold]       {max_calls} calls per model\n")
+
+        test_runner = DockerTestRunner(
+            image=settings.sandbox_image,
+            timeout_seconds=test_timeout,
+        )
+        emb_provider = FastEmbedProvider(
+            model_name=settings.embedding_model,
+            cache_dir=settings.embedding_cache_dir,
+        )
+        tracer = PoseidonTracer(settings)
+
+        def _on_start(mid: str) -> None:
+            console.print(f"[bold cyan]▶ Running clean copy with {mid}...[/bold cyan]")
+
+        try:
+            rows = run_model_comparison(
+                client=client,
+                models=[first_model, second_model],
+                base_workspace=base_workspace,
+                acceptance_test_path=acceptance_test,
+                test_runner=test_runner,
+                embedding_provider=emb_provider,
+                request=DEFAULT_M5_REQUEST,
+                max_calls=max_calls,
+                tracer=tracer,
+                on_model_start=_on_start,
+            )
+        except FileNotFoundError as exc:
+            console.print(f"[bold red]Comparison setup error:[/bold red] {exc}")
+            raise typer.Exit(code=1) from exc
+
+    console.print()
+    _render_model_comparison(rows)
+
+
 @app.command()
 def chat(
     workspace: Annotated[
@@ -821,21 +1000,25 @@ def chat(
         raise typer.Exit(code=1) from exc
 
     chosen_model = model or _select_model_interactive(settings.default_model)
-    render_banner(console, model=chosen_model, workspace=guard.root)
-    console.print(
-        f"[dim]Mode: {mode} | Max calls: {call_limit} | Test timeout: {effective_timeout}s | "
-        f"Auto-edit: {auto_approve}[/dim]"
-    )
-    console.print(
-        "[dim]Commands: /test, /model, /limit <n>, /timeout <s>, "
-        "/auto <on|off>, /mode, /files, /exit[/dim]\n"
-    )
-
     tool_state = ToolSessionState()
+    checkpoints = WorkspaceCheckpointManager(guard)
     history: list[dict[str, Any]] = []
     tracer = PoseidonTracer(settings)
 
     with OpenRouterClient(settings) as client:
+        if mode == "agent":
+            chosen_model = _validate_or_reselect_model(client, chosen_model, interactive=True)
+
+        render_banner(console, model=chosen_model, workspace=guard.root)
+        console.print(
+            f"[dim]Mode: {mode} | Max calls: {call_limit} | Test timeout: {effective_timeout}s | "
+            f"Auto-edit: {auto_approve}[/dim]"
+        )
+        console.print(
+            "[dim]Commands: /compact, /undo, /checkpoints, /test, /model, "
+            "/limit <n>, /timeout <s>, /auto <on|off>, /mode, /files, /exit[/dim]\n"
+        )
+
         while True:
             try:
                 user_input = Prompt.ask("[bold cyan]poseidon>[/bold cyan]").strip()
@@ -854,6 +1037,39 @@ def chat(
                     f"[yellow]Workspace files:[/yellow] {', '.join(files) if files else '(empty)'}"
                 )
                 continue
+            if user_input == "/compact":
+                _, stats = compact_messages(
+                    history,
+                    keep_recent_tool_outputs=2,
+                    min_chars_to_mask=150,
+                    in_place=True,
+                )
+                console.print(
+                    f"[green]✓ Context compacted:[/green] masked {stats.masked_count} old tool "
+                    f"output(s), saved {stats.chars_saved} chars (~{stats.estimated_tokens_saved} "
+                    f"tokens; {stats.chars_before} → {stats.chars_after} chars)."
+                )
+                continue
+            if user_input == "/checkpoints":
+                cps = checkpoints.list_checkpoints()
+                if not cps:
+                    console.print("[dim]No edit checkpoints captured yet.[/dim]")
+                else:
+                    for cp in cps:
+                        console.print(f"  [cyan]#{cp.id}[/cyan] ({cp.created_at}) — {cp.label}")
+                continue
+            if user_input == "/undo":
+                cp, restored = checkpoints.undo()
+                if cp is None:
+                    console.print("[yellow]Nothing to undo (checkpoint stack is empty).[/yellow]")
+                else:
+                    tool_state.read_hashes.clear()
+                    tool_state.dirty_since_last_test = True
+                    console.print(
+                        f"[bold green]↺ Undid checkpoint #{cp.id}[/bold green] "
+                        f"({cp.label}): {', '.join(restored)}"
+                    )
+                continue
             if user_input == "/test":
                 runner = DockerTestRunner(
                     image=settings.sandbox_image,
@@ -863,7 +1079,12 @@ def chat(
                 _render_test_result(res)
                 continue
             if user_input == "/model":
-                chosen_model = _select_model_interactive(chosen_model)
+                selected = _select_model_interactive(chosen_model)
+                chosen_model = (
+                    _validate_or_reselect_model(client, selected, interactive=True)
+                    if mode == "agent"
+                    else selected
+                )
                 console.print(f"[green]Active model switched to:[/green] {chosen_model}")
                 continue
             if user_input.startswith("/limit"):
@@ -911,6 +1132,7 @@ def chat(
                         test_timeout=effective_timeout,
                         auto_approve=auto_approve,
                         tool_state=tool_state,
+                        checkpoints=checkpoints,
                         conversation_history=history,
                         tracer=tracer,
                     )
