@@ -1,7 +1,11 @@
 """Configuration management for Poseidon-CLI."""
 
+from pathlib import Path
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_LOCAL_HOST = "host.docker.internal" if Path("/.dockerenv").exists() else "localhost"
 
 
 class Settings(BaseSettings):
@@ -22,11 +26,11 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr = Field(default=SecretStr(""), alias="GEMINI_API_KEY")
     openai_api_key: SecretStr = Field(default=SecretStr(""), alias="OPENAI_API_KEY")
     ollama_base_url: str = Field(
-        default="http://host.docker.internal:11434/v1",
+        default=f"http://{_LOCAL_HOST}:11434/v1",
         alias="OLLAMA_BASE_URL",
     )
     lmstudio_base_url: str = Field(
-        default="http://host.docker.internal:1234/v1",
+        default=f"http://{_LOCAL_HOST}:1234/v1",
         alias="LMSTUDIO_BASE_URL",
     )
     respan_api_key: SecretStr = Field(default=SecretStr(""), alias="RESPAN_API_KEY")

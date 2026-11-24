@@ -99,8 +99,9 @@ class WorkspaceGuard:
         """Resolve a subdirectory inside the workspace (or workspace root if None/'.')."""
         if relative_dir is None or str(relative_dir).strip() in ("", "."):
             return self.root
+        raw_str = str(relative_dir)
         raw_path = Path(relative_dir)
-        if raw_path.is_absolute():
+        if raw_path.is_absolute() or raw_str.startswith(("/", "\\")):
             raise WorkspaceSecurityError(
                 f"Absolute paths are not allowed in workspace operations: {relative_dir}"
             )
@@ -115,8 +116,9 @@ class WorkspaceGuard:
 
     def resolve_path(self, relative_or_target: str | Path) -> Path:
         """Resolve a user/model-supplied file path and verify it stays strictly in the workspace."""
+        raw_str = str(relative_or_target)
         raw_path = Path(relative_or_target)
-        if raw_path.is_absolute():
+        if raw_path.is_absolute() or raw_str.startswith(("/", "\\")):
             raise WorkspaceSecurityError(
                 f"Absolute paths are not allowed in workspace operations: {relative_or_target}"
             )

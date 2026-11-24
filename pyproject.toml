@@ -18,6 +18,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "respan-tracing>=2.25.0",
     "rich>=13.9.0",
+    "tree-sitter-language-pack>=1.25.2",
     "typer>=0.15.0",
     "websockets>=14.0",
 ]

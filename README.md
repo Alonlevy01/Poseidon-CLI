@@ -73,43 +73,41 @@ flowchart LR
 
 ---
 
-## Quickstart (Docker)
+## Quickstart (Native Python — Recommended)
 
-### 1. Configure Environment & Build Images
-```powershell
+### 1. Install Dependencies & Build the Isolated Test Sandbox
+```bash
+uv sync --extra dev
 cp .env.example .env
 # Add OPENROUTER_API_KEY (and optional RESPAN_API_KEY) to .env — or use local Ollama/LM Studio with zero keys!
 
-docker compose build poseidon
+# Build the disposable --network none test sandbox image (used by `run_tests` / `poseidon test`)
 docker compose --profile build-only build poseidon-sandbox
 ```
 
-### 2. Install Global `poseidon` Command (Windows)
-```powershell
-.\scripts\install.ps1
-```
-Now run Poseidon from **any** project directory:
-
-```powershell
-cd path\to\your\project
-
+### 2. Run Poseidon Directly From Any Project Folder
+```bash
 # Interactive terminal coding agent
-poseidon
-poseidon --plan                 # Read-only Plan Mode (write tools physically omitted)
-poseidon --continue             # Resume latest JSONL session
+uv run poseidon --workspace demo_workspace
+uv run poseidon --workspace demo_workspace --plan       # Read-only Plan Mode (write tools physically omitted)
+uv run poseidon --workspace demo_workspace --continue   # Resume latest JSONL session
 
-# Detached Web Workbench (auto-opens http://localhost:2701, keeps terminal free, auto-stops on tab close)
-poseidon ui -d
-poseidon ui -d --port 2702      # Run a second workspace simultaneously
-poseidon ui status              # List running Web UI instances
-poseidon ui stop --all          # Stop all Web UI instances
+# Abyssal-Ocean Web Workbench (http://localhost:2701)
+uv run poseidon ui --workspace demo_workspace
 
 # 1-second environment & provider health check
-poseidon doctor
+uv run poseidon doctor
 
 # Headless pipe / CI mode
-git diff | poseidon -p "Review this diff for bugs" --plan
-poseidon -p "Summarize @analytics.py" --model ollama:qwen3:8b --plan --json
+git diff | uv run poseidon -p "Review this diff for bugs" --plan
+uv run poseidon -p "Summarize @analytics.py" --workspace demo_workspace --model ollama:qwen3:8b --plan --json
+```
+
+### Optional: Containerized Harness & Global Windows `poseidon` Shim
+If you prefer running the harness itself inside Docker without local Python:
+```powershell
+docker compose build poseidon
+.\scripts\install.ps1   # Installs global `poseidon` & `poseidon ui -d` commands on Windows
 ```
 
 ---

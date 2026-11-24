@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -115,6 +116,20 @@ def _merge_usage(usages: list[TokenUsage]) -> TokenUsage:
     )
 
 
+PARALLEL_SAFE_TOOLS: frozenset[str] = frozenset(
+    {
+        "list_files",
+        "read_file",
+        "read_lines",
+        "search_text",
+        "semantic_search",
+        "get_symbols",
+        "git_status",
+        "git_diff",
+    }
+)
+
+
 def run_agent_loop(
     *,
     client: ToolCapableClient,
@@ -126,6 +141,7 @@ def run_agent_loop(
     conversation_history: list[dict[str, Any]] | None = None,
     on_model_call: Callable[[int, int], None] | None = None,
     on_tool_result: Callable[[ToolEvent], None] | None = None,
+    on_token: Callable[[str], None] | None = None,
     workspace_root: Path | None = None,
     tool_state: ToolSessionState | None = None,
     test_runner: TestRunner | None = None,
@@ -181,12 +197,19 @@ def run_agent_loop(
             available_tools: list[str],
         ) -> dict[str, Any]:
             nonlocal latest_response
-            resp = client.chat_completion(
-                model=target_model,
-                messages=messages,
-                tools=tool_schemas if tool_schemas else None,
-                tool_choice="auto" if tool_schemas else None,
-            )
+            call_kwargs: dict[str, Any] = {
+                "model": target_model,
+                "messages": messages,
+                "tools": tool_schemas if tool_schemas else None,
+                "tool_choice": "auto" if tool_schemas else None,
+            }
+            if on_token is not None:
+                call_kwargs["on_token"] = on_token
+            try:
+                resp = client.chat_completion(**call_kwargs)
+            except TypeError:
+                call_kwargs.pop("on_token", None)
+                resp = client.chat_completion(**call_kwargs)
             latest_response = resp
             return {
                 "call_number": call_number,
@@ -339,6 +362,41 @@ def run_agent_loop(
                 else:
                     stop_reason = "completed (model finished without further tool calls)"
                 break
+
+            can_parallelize = len(response.tool_calls) > 1 and all(
+                tc.name in PARALLEL_SAFE_TOOLS for tc in response.tool_calls
+            )
+            if can_parallelize:
+                with ThreadPoolExecutor(max_workers=min(4, len(response.tool_calls))) as pool:
+                    parallel_results = list(
+                        pool.map(
+                            lambda tc_item: registry.execute(tc_item.name, tc_item.arguments),
+                            response.tool_calls,
+                        )
+                    )
+                for tc, tool_res in zip(response.tool_calls, parallel_results, strict=True):
+                    for mod_file in tool_res.modified_files:
+                        if mod_file not in modified_files:
+                            modified_files.append(mod_file)
+                    event = ToolEvent(
+                        call_index=calls_made,
+                        tool_call_id=tc.id,
+                        tool_name=tc.name,
+                        ok=tool_res.ok,
+                        summary=tool_res.summary,
+                    )
+                    tool_events.append(event)
+                    if on_tool_result is not None:
+                        on_tool_result(event)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": tc.name,
+                            "content": tool_res.output,
+                        }
+                    )
+                continue
 
             for tc in response.tool_calls:
                 active_tracer.run_tool_call(

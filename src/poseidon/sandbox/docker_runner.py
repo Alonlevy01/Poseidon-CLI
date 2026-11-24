@@ -406,3 +406,100 @@ class DockerTestRunner:
                 with contextlib.suppress(DockerException):
                     container.remove(force=True)
             client.close()
+
+    def run_command(
+        self,
+        workspace_root: Path,
+        command: str,
+        *,
+        timeout_seconds: int | None = None,
+    ) -> dict[str, object]:
+        """Execute a diagnostic shell command inside a disposable --network none container.
+
+        Workspace files are copied in via tar (never bind-mounted), so host files cannot be
+        mutated even if the command writes or deletes files inside `/sandbox`.
+        """
+        import docker
+        from docker.errors import DockerException, ImageNotFound
+
+        effective_timeout = max(1, int(timeout_seconds or self._timeout_seconds))
+        started = time.perf_counter()
+        try:
+            client = docker.from_env()
+            client.ping()
+        except DockerException as exc:
+            return {
+                "ok": False,
+                "exit_code": None,
+                "timed_out": False,
+                "output": f"Cannot connect to Docker daemon: {exc}",
+                "elapsed_seconds": round(time.perf_counter() - started, 3),
+            }
+
+        container = None
+        try:
+            tar_bytes = build_workspace_tar(workspace_root)
+            container = client.containers.create(
+                image=self._image,
+                entrypoint=[],
+                command=["sh", "-lc", command],
+                working_dir="/sandbox",
+                user="sandbox" if self._image == "poseidon-sandbox:dev" else None,
+                environment={"PYTHONPATH": "/sandbox:/sandbox/src"},
+                network_mode="none",
+                cap_drop=["ALL"],
+                security_opt=["no-new-privileges:true"],
+                mem_limit=self._mem_limit,
+                nano_cpus=self._nano_cpus,
+                pids_limit=self._pids_limit,
+            )
+            container.put_archive("/sandbox", tar_bytes)
+            container.start()
+
+            timed_out = False
+            exit_code: int | None = None
+            try:
+                wait_res = container.wait(timeout=effective_timeout)
+                exit_code = int(wait_res.get("StatusCode", 1))
+            except Exception as exc:
+                if "timed out" in str(exc).lower() or "timeout" in type(exc).__name__.lower():
+                    timed_out = True
+                    with contextlib.suppress(DockerException):
+                        container.kill()
+                else:
+                    raise
+
+            output = container.logs(stdout=True, stderr=True).decode("utf-8", errors="replace")
+            if len(output) > 6000:
+                output = output[:6000] + "\n... [output truncated]"
+            return {
+                "ok": (not timed_out and exit_code == 0),
+                "exit_code": exit_code,
+                "timed_out": timed_out,
+                "output": output.strip() or "(no output)",
+                "elapsed_seconds": round(time.perf_counter() - started, 3),
+            }
+        except ImageNotFound:
+            return {
+                "ok": False,
+                "exit_code": None,
+                "timed_out": False,
+                "output": (
+                    f"Sandbox image '{self._image}' not found. "
+                    "Build it with: docker compose --profile build-only build poseidon-sandbox"
+                ),
+                "elapsed_seconds": round(time.perf_counter() - started, 3),
+            }
+        except DockerException as exc:
+            return {
+                "ok": False,
+                "exit_code": None,
+                "timed_out": False,
+                "output": f"Docker sandbox error: {exc}",
+                "elapsed_seconds": round(time.perf_counter() - started, 3),
+            }
+        finally:
+            if container is not None:
+                with contextlib.suppress(DockerException):
+                    container.remove(force=True)
+            client.close()

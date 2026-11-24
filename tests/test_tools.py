@@ -41,6 +41,7 @@ def test_registry_exports_openrouter_schemas(tmp_path: Path) -> None:
         "git_diff",
         "web_search",
         "fetch_url",
+        "get_symbols",
     ]
     assert all(s["type"] == "function" for s in schemas)
 

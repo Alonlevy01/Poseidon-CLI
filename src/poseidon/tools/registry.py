@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from poseidon.patching.unified_diff import PatchError
+from poseidon.privacy import redact_secrets
 from poseidon.sandbox.docker_runner import TestRunResult
 from poseidon.workspace import WorkspaceSecurityError
 
@@ -116,7 +117,16 @@ class ToolRegistry:
             )
 
         try:
-            return tool.handler(args)
+            res = tool.handler(args)
+            redacted_out, hits = redact_secrets(res.output)
+            if hits > 0:
+                res = res.model_copy(
+                    update={
+                        "output": redacted_out,
+                        "summary": f"{res.summary} ({hits} secret(s) redacted)",
+                    }
+                )
+            return res
         except (WorkspaceSecurityError, PatchError, FileNotFoundError, OSError, ValueError) as exc:
             return ToolExecutionResult(
                 tool_name=name,

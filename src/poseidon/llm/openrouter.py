@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -86,6 +87,90 @@ class ChatResponse(BaseModel):
                 for tc in self.tool_calls
             ]
         return msg
+
+
+def consume_openai_sse_lines(
+    lines: Any,
+    *,
+    requested_model: str,
+    elapsed: float,
+    on_token: Callable[[str], None] | None = None,
+) -> ChatResponse:
+    """Assemble a ChatResponse from OpenAI/OpenRouter/Ollama SSE `data: ...` lines."""
+    content_parts: list[str] = []
+    tool_acc: dict[int, dict[str, str]] = {}
+    resolved_model = requested_model
+    finish_reason: str | None = None
+    usage = TokenUsage()
+
+    for raw_line in lines:
+        line = str(raw_line).strip()
+        if not line or not line.startswith("data:"):
+            continue
+        data_str = line[5:].strip()
+        if data_str == "[DONE]":
+            break
+        try:
+            chunk = json.loads(data_str)
+        except json.JSONDecodeError:
+            continue
+
+        if chunk.get("model"):
+            resolved_model = str(chunk["model"])
+        raw_usage = chunk.get("usage")
+        if isinstance(raw_usage, dict) and raw_usage:
+            usage = TokenUsage(
+                prompt_tokens=raw_usage.get("prompt_tokens"),
+                completion_tokens=raw_usage.get("completion_tokens"),
+                reasoning_tokens=(raw_usage.get("completion_tokens_details") or {}).get(
+                    "reasoning_tokens"
+                ),
+                total_tokens=raw_usage.get("total_tokens"),
+                cost_usd=raw_usage.get("cost"),
+            )
+
+        choices = chunk.get("choices") or []
+        if not choices:
+            continue
+        choice = choices[0]
+        if choice.get("finish_reason"):
+            finish_reason = str(choice["finish_reason"])
+        delta = choice.get("delta") or {}
+
+        piece = delta.get("content")
+        if isinstance(piece, str) and piece:
+            content_parts.append(piece)
+            if on_token is not None:
+                on_token(piece)
+
+        for tc_delta in delta.get("tool_calls") or []:
+            idx = int(tc_delta.get("index", 0))
+            slot = tool_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+            if tc_delta.get("id"):
+                slot["id"] = str(tc_delta["id"])
+            fn = tc_delta.get("function") or {}
+            if fn.get("name"):
+                slot["name"] += str(fn["name"])
+            if fn.get("arguments"):
+                slot["arguments"] += str(fn["arguments"])
+
+    tool_calls = [
+        ToolCall(
+            id=slot["id"] or f"call_{idx}",
+            name=slot["name"],
+            arguments=slot["arguments"] or "{}",
+        )
+        for idx, slot in sorted(tool_acc.items())
+        if slot["name"]
+    ]
+    return ChatResponse(
+        model=resolved_model,
+        content="".join(content_parts),
+        tool_calls=tool_calls,
+        usage=usage,
+        elapsed_seconds=elapsed,
+        finish_reason=finish_reason,
+    )
 
 
 def parse_provider_model(model_id: str) -> tuple[str, str]:
@@ -241,6 +326,7 @@ class OpenRouterClient:
         temperature: float = 0.2,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | None = None,
+        on_token: Callable[[str], None] | None = None,
     ) -> ChatResponse:
         """Route a chat completion to OpenRouter, Claude, Gemini, GPT, Ollama, or LM Studio."""
         provider, target_model = parse_provider_model(model)
@@ -263,6 +349,7 @@ class OpenRouterClient:
                 temperature=temperature,
                 tools=tools,
                 tool_choice=tool_choice,
+                on_token=on_token,
             )
 
         # Default: OpenRouter
@@ -288,6 +375,31 @@ class OpenRouterClient:
             payload["tool_choice"] = tool_choice or "auto"
 
         started = time.perf_counter()
+        if on_token is not None:
+            payload["stream"] = True
+            payload["stream_options"] = {"include_usage": True}
+            try:
+                with self._client.stream(
+                    "POST", "/chat/completions", headers=headers, json=payload
+                ) as resp:
+                    if resp.status_code >= 400:
+                        resp.read()
+                        return _parse_openai_response(
+                            response=resp,
+                            provider_label="OpenRouter",
+                            requested_model=model,
+                            tools=tools,
+                            elapsed=time.perf_counter() - started,
+                        )
+                    return consume_openai_sse_lines(
+                        resp.iter_lines(),
+                        requested_model=model,
+                        elapsed=time.perf_counter() - started,
+                        on_token=on_token,
+                    )
+            except httpx.HTTPError as exc:
+                raise OpenRouterError(f"Network error contacting OpenRouter: {exc}") from exc
+
         try:
             response = self._client.post("/chat/completions", headers=headers, json=payload)
         except httpx.HTTPError as exc:
@@ -311,6 +423,7 @@ class OpenRouterClient:
         temperature: float,
         tools: list[dict[str, Any]] | None,
         tool_choice: str | None,
+        on_token: Callable[[str], None] | None = None,
     ) -> ChatResponse:
         if provider == "ollama":
             base_url = self._ollama_base_url
@@ -352,6 +465,24 @@ class OpenRouterClient:
         started = time.perf_counter()
         try:
             with httpx.Client(timeout=self._settings.request_timeout_seconds) as client:
+                if on_token is not None:
+                    payload["stream"] = True
+                    with client.stream("POST", url, headers=headers, json=payload) as resp:
+                        if resp.status_code >= 400:
+                            resp.read()
+                            return _parse_openai_response(
+                                response=resp,
+                                provider_label=label,
+                                requested_model=full_model,
+                                tools=tools,
+                                elapsed=time.perf_counter() - started,
+                            )
+                        return consume_openai_sse_lines(
+                            resp.iter_lines(),
+                            requested_model=full_model,
+                            elapsed=time.perf_counter() - started,
+                            on_token=on_token,
+                        )
                 response = client.post(url, headers=headers, json=payload)
         except httpx.HTTPError as exc:
             hint = (

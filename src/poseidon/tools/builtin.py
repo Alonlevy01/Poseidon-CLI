@@ -8,6 +8,7 @@ from typing import Any
 
 from poseidon.context.checkpoints import WorkspaceCheckpointManager
 from poseidon.indexing.semantic_index import SemanticCodeIndex
+from poseidon.indexing.symbols import extract_file_symbols, format_symbols_outline
 from poseidon.patching.python_preflight import check_python_source
 from poseidon.patching.unified_diff import (
     apply_unified_diff,
@@ -641,4 +642,95 @@ def register_core_tools(
             registry,
             tavily_api_key=tavily_api_key,
             brave_api_key=brave_api_key,
+        )
+
+    def handle_get_symbols(args: dict[str, Any]) -> ToolExecutionResult:
+        rel_path = str(args["path"]).strip()
+        content = workspace.read_text(rel_path)
+        syms = extract_file_symbols(rel_path, content)
+        return ToolExecutionResult(
+            tool_name="get_symbols",
+            ok=True,
+            output=format_symbols_outline(rel_path, syms),
+            summary=f"{len(syms)} symbol(s) in {rel_path}",
+        )
+
+    registry.register(
+        ToolDefinition(
+            name="get_symbols",
+            description=(
+                "Extract a compact Tree-sitter outline of classes, functions, and methods "
+                "with exact line ranges (Python, JS/TS, Go, Rust, Java, C/C++) before reading."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative file path inside the workspace.",
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            handler=handle_get_symbols,
+        )
+    )
+
+    if test_runner is not None and hasattr(test_runner, "run_command"):
+        def handle_run_sandbox_cmd(args: dict[str, Any]) -> ToolExecutionResult:
+            cmd = str(args["command"]).strip()
+            if not cmd:
+                return ToolExecutionResult(
+                    tool_name="run_sandbox_cmd",
+                    ok=False,
+                    output="Error: command must be non-empty.",
+                    summary="empty command",
+                )
+            if confirm_patch is not None:
+                preview = f"SANDBOX CMD (--network none, disposable copy):\n$ {cmd}"
+                if not confirm_patch(preview):
+                    return ToolExecutionResult(
+                        tool_name="run_sandbox_cmd",
+                        ok=False,
+                        output="Command rejected by user.",
+                        summary="rejected by user",
+                    )
+            res = test_runner.run_command(workspace.root, cmd)
+            exit_code = res.get("exit_code")
+            timed_out = bool(res.get("timed_out"))
+            out_txt = str(res.get("output") or "")
+            ok = bool(res.get("ok"))
+            header = (
+                f"Sandbox Command: {cmd}\n"
+                f"Exit: {exit_code} | Timed out: {timed_out} | "
+                f"Elapsed: {res.get('elapsed_seconds')}s\n\n"
+            )
+            return ToolExecutionResult(
+                tool_name="run_sandbox_cmd",
+                ok=ok,
+                output=header + out_txt,
+                summary=f"exit={exit_code}" if not timed_out else "timed out",
+            )
+
+        registry.register(
+            ToolDefinition(
+                name="run_sandbox_cmd",
+                description=(
+                    "Run a diagnostic shell command (e.g. `python -c ...`, `ruff check`) inside "
+                    "a disposable --network none Docker copy of the workspace. Zero host access."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Shell command to execute inside /sandbox.",
+                        }
+                    },
+                    "required": ["command"],
+                    "additionalProperties": False,
+                },
+                handler=handle_run_sandbox_cmd,
+            )
         )
