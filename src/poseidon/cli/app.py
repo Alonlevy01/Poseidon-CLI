@@ -1991,15 +1991,26 @@ def _start_interactive_session(
                 continue
             if user_input == "/key" or user_input.startswith("/key "):
                 kparts = user_input.split()
-                if len(kparts) != 3 or kparts[2].lower() not in {"set", "clear"}:
-                    console.print(
-                        "[yellow]Usage: /key <openrouter|anthropic|gemini|openai> "
-                        "<set|clear>[/yellow]"
-                    )
+                valid_usage = (
+                    "[yellow]Usage: /key <openrouter|anthropic|gemini|openai> "
+                    "<set|clear|use <target|env|auto>>[/yellow]"
+                )
+                if len(kparts) < 3 or kparts[2].lower() not in {"set", "clear", "use"}:
+                    console.print(valid_usage)
                     continue
                 prov_name, action = kparts[1].lower(), kparts[2].lower()
                 try:
-                    if action == "clear":
+                    if action == "use":
+                        if len(kparts) < 4:
+                            console.print(valid_usage)
+                            continue
+                        target_pref = " ".join(kparts[3:]).strip()
+                        secrets_store.set_preferred_source(prov_name, target_pref)
+                        console.print(
+                            f"[green]✓ Set {prov_name} key preference to '{target_pref}'. "
+                            "Run /providers to verify.[/green]"
+                        )
+                    elif action == "clear":
                         removed_k = secrets_store.clear_key(prov_name)
                         msg_k = (
                             f"[green]✓ Cleared saved key for {prov_name}.[/green]"

@@ -33,6 +33,14 @@ class Settings(BaseSettings):
         default=f"http://{_LOCAL_HOST}:1234/v1",
         alias="LMSTUDIO_BASE_URL",
     )
+    local_ai_base_url: str = Field(
+        default="",
+        alias="LOCAL_AI_BASE_URL",
+    )
+    local_ai_api_key: SecretStr = Field(
+        default=SecretStr("local"),
+        alias="LOCAL_AI_API_KEY",
+    )
     respan_api_key: SecretStr = Field(default=SecretStr(""), alias="RESPAN_API_KEY")
     respan_base_url: str | None = Field(
         default=None,

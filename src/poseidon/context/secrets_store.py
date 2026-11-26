@@ -71,13 +71,67 @@ class ProviderSecretsStore:
         except Exception:
             return None
 
+    @property
+    def _prefs_path(self) -> Path:
+        return self._path.parent / "key_preferences.json"
+
+    def _read_prefs(self) -> dict[str, str]:
+        if not self._prefs_path.is_file():
+            return {}
+        try:
+            raw = json.loads(self._prefs_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                return {str(k): str(v) for k, v in raw.items() if str(v).strip()}
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return {}
+
+    def set_preferred_source(self, provider: str, target: str) -> None:
+        """Pin a provider to a specific keyring target name, `'env'`, or `'auto'`."""
+        prov = provider.lower().strip()
+        if prov not in SUPPORTED_KEY_PROVIDERS:
+            valid = ", ".join(SUPPORTED_KEY_PROVIDERS)
+            raise ValueError(f"Unknown provider '{provider}'. Supported: {valid}.")
+        prefs = self._read_prefs()
+        cleaned = target.strip()
+        if not cleaned or cleaned.lower() == "auto":
+            prefs.pop(prov, None)
+        else:
+            prefs[prov] = cleaned
+        self._prefs_path.parent.mkdir(parents=True, exist_ok=True)
+        self._prefs_path.write_text(json.dumps(prefs, indent=2) + "\n", encoding="utf-8")
+
     def _keyring_lookup(self, provider: str) -> tuple[str, str]:
-        """Return `(secret_value, matched_target_label)` checking dedicated Poseidon keys first."""
+        """Return `(secret_value, matched_target_label)` honoring user preference first."""
+        pref = self._read_prefs().get(provider, "").strip()
+        if pref.lower() == "env":
+            return "", ""
+
         kr = self._get_keyring()
         if kr is None:
             return "", ""
         service = os.environ.get("POSEIDON_KEYRING_SERVICE", "").strip() or KEYRING_SERVICE_NAME
         _, env_var = SUPPORTED_KEY_PROVIDERS.get(provider, ("", ""))
+
+        # 0. Explicit user-selected credential target (e.g. `/key openrouter use my-key`)
+        if pref:
+            if "/" in pref:
+                p_svc, p_usr = pref.split("/", 1)
+                try:
+                    val = kr.get_password(p_svc, p_usr)
+                    if val and str(val).strip():
+                        return str(val).strip(), pref
+                except Exception:
+                    pass
+            get_cred_pref = getattr(kr, "get_credential", None)
+            if callable(get_cred_pref):
+                try:
+                    cred = get_cred_pref(pref, None)
+                    pw = getattr(cred, "password", None) if cred is not None else None
+                    if pw and str(pw).strip():
+                        return str(pw).strip(), pref
+                except Exception:
+                    pass
 
         # 1. Dedicated Poseidon credentials first (e.g. poseidon-cli/openrouter)
         for user_key in (provider, env_var):

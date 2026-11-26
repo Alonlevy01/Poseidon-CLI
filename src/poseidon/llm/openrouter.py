@@ -174,9 +174,9 @@ def consume_openai_sse_lines(
 
 
 def parse_provider_model(model_id: str) -> tuple[str, str]:
-    """Parse provider prefix (`ollama:`, `lmstudio:`, `openai:`, `gemini:`, `anthropic:`)."""
+    """Parse provider prefix (`ollama:`, `lmstudio:`, `local:`, `openai:`, `gemini:`, etc.)."""
     cleaned = model_id.strip()
-    for prefix in ("ollama:", "lmstudio:", "openai:", "gemini:", "anthropic:"):
+    for prefix in ("ollama:", "lmstudio:", "local:", "openai:", "gemini:", "anthropic:"):
         if cleaned.lower().startswith(prefix):
             provider = prefix[:-1]
             target = cleaned[len(prefix) :].strip()
@@ -186,16 +186,19 @@ def parse_provider_model(model_id: str) -> tuple[str, str]:
 
 def discover_local_models(
     *,
-    ollama_base_url: str = "http://host.docker.internal:11434/v1",
-    lmstudio_base_url: str = "http://host.docker.internal:1234/v1",
+    ollama_base_url: str = "http://localhost:11434/v1",
+    lmstudio_base_url: str = "http://localhost:1234/v1",
+    local_ai_base_url: str = "",
     timeout_seconds: float = 2.5,
 ) -> dict[str, dict[str, Any]]:
-    """Probe local Ollama and LM Studio servers for currently available models."""
+    """Probe Ollama, LM Studio, and optional generic OpenAI-compatible `LOCAL_AI_BASE_URL`."""
     out: dict[str, dict[str, Any]] = {}
-    targets = (
+    targets: list[tuple[str, str]] = [
         ("ollama", ollama_base_url.rstrip("/")),
         ("lmstudio", lmstudio_base_url.rstrip("/")),
-    )
+    ]
+    if local_ai_base_url.strip():
+        targets.append(("local", local_ai_base_url.strip().rstrip("/")))
     for provider, base_url in targets:
         models: list[str] = []
         reachable = False
@@ -340,7 +343,7 @@ class OpenRouterClient:
                 tools=tools,
             )
 
-        if provider in {"ollama", "lmstudio", "openai", "gemini"}:
+        if provider in {"ollama", "lmstudio", "local", "openai", "gemini"}:
             return self._openai_compatible_completion(
                 provider=provider,
                 full_model=model,
@@ -433,6 +436,15 @@ class OpenRouterClient:
             base_url = self._lmstudio_base_url
             api_key = "lm-studio"
             label = "LM Studio"
+        elif provider == "local":
+            base_url = self._settings.local_ai_base_url.strip()
+            if not base_url:
+                raise MissingApiKeyError(
+                    "LOCAL_AI_BASE_URL is not set. Set e.g. "
+                    "LOCAL_AI_BASE_URL=http://localhost:8080/v1 in .env for generic local models."
+                )
+            api_key = self._settings.local_ai_api_key.get_secret_value().strip() or "local"
+            label = "Local OpenAI-Compatible"
         elif provider == "openai":
             base_url = OPENAI_BASE_URL
             api_key = self._secrets.resolve_key("openai", self._settings)

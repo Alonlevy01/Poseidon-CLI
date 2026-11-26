@@ -219,3 +219,44 @@ def test_os_keyring_secrets_store(tmp_path: Path) -> None:
     assert store.masked_status()["openrouter"]["source"] == "keyring"
     assert store.clear_key("openrouter") is True
     assert store.masked_status()["openrouter"]["source"] != "keyring"
+
+
+def test_key_preference_override_and_generic_local_provider(tmp_path: Path) -> None:
+    from poseidon.context.secrets_store import ProviderSecretsStore
+    from poseidon.llm.openrouter import parse_provider_model
+
+    assert parse_provider_model("local:qwen2.5-coder") == ("local", "qwen2.5-coder")
+    assert parse_provider_model("ollama:qwen3:8b") == ("ollama", "qwen3:8b")
+
+    class _Cred:
+        def __init__(self, password: str) -> None:
+            self.password = password
+
+    class _MultiKeyring:
+        def __init__(self) -> None:
+            self.creds = {
+                "key:openrouter": "sk-or-v1-generalkey1234567890",
+                "course-openrouter": "sk-or-v1-coursekey1234567890",
+            }
+
+        def get_password(self, service: str, key: str) -> str | None:
+            return None
+
+        def get_credential(self, target: str, _user: Any) -> Any:
+            pw = self.creds.get(target)
+            return _Cred(pw) if pw else None
+
+    store = ProviderSecretsStore(
+        path=tmp_path / "keys.json",
+        use_keyring=True,
+        keyring_backend=_MultiKeyring(),
+    )
+    # Default picks general `key:openrouter`
+    assert store.masked_status()["openrouter"]["keyring_target"] == "key:openrouter"
+    # User overrides to a different Windows Credential Manager entry
+    store.set_preferred_source("openrouter", "course-openrouter")
+    assert store.resolve_key("openrouter") == "sk-or-v1-coursekey1234567890"
+    assert store.masked_status()["openrouter"]["keyring_target"] == "course-openrouter"
+    # User forces `.env` instead of keyring
+    store.set_preferred_source("openrouter", "env")
+    assert store.masked_status()["openrouter"]["source"] != "keyring"

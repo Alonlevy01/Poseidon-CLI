@@ -62,8 +62,8 @@ flowchart LR
   - **`Ctrl+K`** fuzzy command & file palette, **`@file`** & **`@image.png`** mentions with fuzzy `@` picker, **Split / Unified Diff** approval cards, **Prompt History (`↑`/`↓`)**, **Clipboard Screenshot Paste (`Ctrl+V`)** for vision models, and a **Centered 5-Tab Settings Modal**.
 - **6 AI Providers (Cloud + Local AI):**
   - **OpenRouter** (default free model `nvidia/nemotron-3.5-super-vl:free` + live catalog browser in Settings)
-  - **Local AI (Zero API Key):** **Ollama** (`ollama:<model>`) and **LM Studio** (`lmstudio:<model>`) with live `localhost` auto-discovery
-  - **Direct Cloud BYOK:** **Anthropic Claude** (`anthropic:<model>`), **Google Gemini** (`gemini:<model>`), **OpenAI GPT** (`openai:<model>`) — keys stored outside your project folder (`~/.poseidon_secrets/keys.json`, `0600`), never committed to Git or logged.
+  - **Local AI (Zero API Key):** **Ollama** (`ollama:<model>`), **LM Studio** (`lmstudio:<model>`), and **any generic OpenAI-compatible local server** (`local:<model>` via `LOCAL_AI_BASE_URL` for `llama.cpp`, `vLLM`, `Jan`, `LocalAI`) with live `localhost` auto-discovery.
+  - **Direct Cloud BYOK & OS Keyring:** **Anthropic Claude**, **Google Gemini**, **OpenAI GPT**, and **OpenRouter** — keys are resolved automatically from your **OS Keyring** (Windows Credential Manager / macOS Keychain / Linux SecretService) or `.env`, and you can switch which key is active anytime via `/key <provider> use <target|env|auto>`.
 - **Fast Multi-Language Navigation & Execution:**
   - **Parallel Read-Only Tools** execute concurrent file/search/symbol calls in one turn while keeping edits & tests sequential and atomic.
   - **Tree-sitter `get_symbols`** extracts compact class/function/method line outlines across Python, JS/TS, Go, Rust, Java, and C/C++.
@@ -138,8 +138,8 @@ Install the global native shim so `poseidon` and `poseidon ui -d` work from **an
 
 - **Workspace Containment (`WorkspaceGuard`):** Blocks absolute paths, `..` traversal, and secret patterns (`.env*`, `*.pem`, `*.key`, `*credentials*`, `id_rsa*`) across every tool, file viewer endpoint, and `@file` mention.
 - **Outbound Secret Redaction (`privacy.py`):** Automatically scrubs accidental hardcoded API keys, tokens, PEM private keys, and password assignments from tool outputs before they leave your machine.
-- **Disposable Test & Command Sandbox:** Untrusted project code (`run_tests`, `run_sandbox_cmd`) runs inside a disposable `poseidon-sandbox:dev` container on a tar-copied snapshot with `--network none`, `cap_drop=["ALL"]`, `no-new-privileges:true`, non-root user, 512 MB RAM / 1 CPU / 64 PIDs limits, hard timeout, and **zero secrets injected**.
-- **Out-of-Workspace Credentials:** User-entered API keys live in `~/.poseidon_secrets/keys.json` (`0600`) and are never returned in plaintext.
+- **Disposable Test & Command Sandbox + Input Validation:** Untrusted project code (`run_tests`, `run_sandbox_cmd`) passes through `validate_sandbox_command()` (blocking destructive shell patterns like `rm`, `mkfs`, `dd`, fork bombs, `curl`/`wget` piping) and runs inside a disposable `poseidon-sandbox:dev` container on a tar-copied snapshot with `--network none`, `cap_drop=["ALL"]`, `no-new-privileges:true`, non-root user, 512 MB RAM / 1 CPU / 64 PIDs limits, hard timeout, and **zero secrets injected**.
+- **OS Keyring & Out-of-Workspace Credentials:** API keys are stored in your native OS Keyring (`keyring` — Windows Credential Manager / macOS Keychain / Linux SecretService) with a `0600` fallback file (`~/.poseidon_secrets/keys.json`) and `.env` support, never returned in plaintext.
 - **SSRF Protection:** `fetch_url` resolves hostnames and blocks loopback, private RFC1918, link-local, and metadata IPs before and after redirects.
 
 ---
