@@ -382,9 +382,27 @@ class OpenRouterClient:
             "HTTP-Referer": self._settings.http_referer,
             "X-Title": self._settings.app_title,
         }
+        cached_messages = messages
+        if target_model.lower().startswith("anthropic/") and messages:
+            first = messages[0]
+            if first.get("role") == "system" and isinstance(first.get("content"), str):
+                cached_messages = [
+                    {
+                        "role": "system",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": first["content"],
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ],
+                    },
+                    *messages[1:],
+                ]
+
         payload: dict[str, Any] = {
             "model": target_model,
-            "messages": messages,
+            "messages": cached_messages,
             "temperature": temperature,
         }
         if tools:
@@ -553,9 +571,18 @@ class OpenRouterClient:
             "messages": anthropic_msgs,
         }
         if system_parts:
-            payload["system"] = "\n\n".join(system_parts)
+            payload["system"] = [
+                {
+                    "type": "text",
+                    "text": "\n\n".join(system_parts),
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
         if tools:
-            payload["tools"] = _convert_tools_to_anthropic(tools)
+            anth_tools = _convert_tools_to_anthropic(tools)
+            if anth_tools:
+                anth_tools[-1]["cache_control"] = {"type": "ephemeral"}
+            payload["tools"] = anth_tools
 
         headers = {
             "x-api-key": api_key,

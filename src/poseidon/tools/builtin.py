@@ -69,6 +69,7 @@ def register_core_tools(
     hooks: HookManager | None = None,
     protect_tests: bool = True,
     read_only: bool = False,
+    dry_run: bool = False,
     enable_preflight: bool = True,
     enable_web_tools: bool = True,
     enable_git_tools: bool = True,
@@ -219,6 +220,18 @@ def register_core_tools(
                     summary=f"creation declined ({rel_path})",
                 )
 
+        if dry_run:
+            preview = _format_new_file_as_diff(rel_path, normalized)
+            return ToolExecutionResult(
+                tool_name="create_file",
+                ok=True,
+                output=(
+                    f"[DRY-RUN] Validated new file '{rel_path}' "
+                    f"({len(normalized.splitlines())} lines — not written to disk):\n{preview}"
+                ),
+                summary=f"dry-run validated {rel_path}",
+            )
+
         if checkpoints is not None:
             checkpoints.capture(label=f"create {rel_path}", target_paths=[rel_path])
         workspace.write_text(rel_path, normalized)
@@ -319,6 +332,18 @@ def register_core_tools(
                 ok=False,
                 output="User declined to apply this patch. Files were left unchanged.",
                 summary="patch declined by user",
+            )
+
+        if dry_run:
+            target_csv = ", ".join(fp.target_path for fp in file_patches)
+            return ToolExecutionResult(
+                tool_name="apply_diff",
+                ok=True,
+                output=(
+                    f"[DRY-RUN] Validated unified diff for {target_csv} "
+                    f"(not written to disk):\n{diff_text}"
+                ),
+                summary=f"dry-run validated {target_csv}",
             )
 
         if checkpoints is not None:
@@ -736,3 +761,89 @@ def register_core_tools(
                 handler=handle_run_sandbox_cmd,
             )
         )
+
+
+def register_subagent_tool(
+    *,
+    registry: ToolRegistry,
+    workspace: WorkspaceGuard,
+    client: Any,
+    model: str,
+    semantic_index: SemanticCodeIndex | None = None,
+) -> None:
+    """Register the read-only `delegate_research` subagent tool for clean context isolation."""
+
+    def handle_delegate_research(args: dict[str, Any]) -> ToolExecutionResult:
+        from poseidon.core.agent import run_agent_loop
+
+        question = str(args.get("question", "")).strip()
+        if not question:
+            return ToolExecutionResult(
+                tool_name="delegate_research",
+                ok=False,
+                output="Error: 'question' must be a non-empty research prompt.",
+                summary="missing question",
+            )
+        max_calls = min(max(1, int(args.get("max_calls", 5))), 8)
+
+        child_registry = ToolRegistry()
+        child_state = ToolSessionState()
+        register_core_tools(
+            registry=child_registry,
+            workspace=workspace,
+            state=child_state,
+            semantic_index=semantic_index,
+            read_only=True,
+            enable_web_tools=False,
+        )
+
+        sub_prompt = (
+            "You are a focused read-only codebase research subagent. "
+            "Investigate the workspace using your read-only tools and return a concise, "
+            "fact-dense answer citing exact file paths and symbol names. Do not ask follow-up "
+            "questions."
+        )
+        res = run_agent_loop(
+            client=client,
+            registry=child_registry,
+            model=model,
+            user_prompt=question,
+            max_calls=max_calls,
+            workspace_root=workspace.root,
+            tool_state=child_state,
+            system_prompt=sub_prompt,
+        )
+        answer = res.final_response.strip() or "(Subagent returned no summary.)"
+        return ToolExecutionResult(
+            tool_name="delegate_research",
+            ok=True,
+            output=f"[Subagent Research — {res.calls_made} calls]\n\n{answer}",
+            summary=f"researched in {res.calls_made} call(s)",
+        )
+
+    registry.register(
+        ToolDefinition(
+            name="delegate_research",
+            description=(
+                "Spawn a clean read-only research subagent with its own context window to "
+                "explore files, search symbols, and return a concise summary without bloating "
+                "the main conversation."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "Specific codebase research question for the subagent.",
+                    },
+                    "max_calls": {
+                        "type": "integer",
+                        "description": "Max tool-calling turns for the subagent (1-8, default 5).",
+                    },
+                },
+                "required": ["question"],
+                "additionalProperties": False,
+            },
+            handler=handle_delegate_research,
+        )
+    )

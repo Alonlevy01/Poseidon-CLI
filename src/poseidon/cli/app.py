@@ -66,7 +66,8 @@ from poseidon.patching.unified_diff import PatchError, apply_unified_diff
 from poseidon.plugins.hooks import HookManager
 from poseidon.plugins.loader import load_workspace_plugins
 from poseidon.sandbox.docker_runner import DockerTestRunner, TestRunResult
-from poseidon.tools.builtin import register_core_tools
+from poseidon.tools.builtin import register_core_tools, register_subagent_tool
+from poseidon.tools.git_tools import draft_commit_message, run_git_commit
 from poseidon.tools.registry import ToolRegistry, ToolSessionState
 from poseidon.workspace import WorkspaceGuard, WorkspaceSecurityError
 
@@ -319,6 +320,7 @@ def _run_agent_with_ui(
     conversation_history: list[dict[str, Any]] | None = None,
     tracer: PoseidonTracer | None = None,
     plan_mode: bool = False,
+    dry_run: bool = False,
     enable_web_tools: bool = True,
     sandbox_image: str | None = None,
     user_images: list[dict[str, str]] | None = None,
@@ -351,9 +353,17 @@ def _run_agent_with_ui(
         hooks=hooks,
         protect_tests=True,
         read_only=plan_mode,
+        dry_run=dry_run,
         enable_web_tools=enable_web_tools,
         tavily_api_key=settings.tavily_api_key.get_secret_value(),
         brave_api_key=settings.brave_api_key.get_secret_value(),
+    )
+    register_subagent_tool(
+        registry=registry,
+        workspace=workspace,
+        client=client,
+        model=model,
+        semantic_index=semantic_index,
     )
 
     plugin_report = load_workspace_plugins(workspace=workspace, registry=registry, hooks=hooks)
@@ -555,6 +565,13 @@ def root_callback(
         bool,
         typer.Option("--plan", help="Start in read-only Plan Mode (write tools disabled)."),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Validate diffs and AST/Ruff preflight without writing files to disk.",
+        ),
+    ] = False,
     continue_last: Annotated[
         bool,
         typer.Option("--continue", "-c", help="Resume the most recent saved session."),
@@ -594,6 +611,7 @@ def root_callback(
             prompt=print_prompt,
             model=model,
             plan=plan,
+            dry_run=dry_run,
             max_calls=max_calls,
             yes=yes,
             json_output=json_output,
@@ -608,6 +626,7 @@ def root_callback(
         test_timeout=None,
         yes=yes,
         plan=plan,
+        dry_run=dry_run,
         continue_last=continue_last,
         resume=resume,
         prompt_for_model=False,
@@ -644,6 +663,7 @@ def _run_headless_print(
     prompt: str,
     model: str | None,
     plan: bool,
+    dry_run: bool = False,
     max_calls: int | None,
     yes: bool,
     json_output: bool,
@@ -689,6 +709,7 @@ def _run_headless_print(
             auto_approve=yes,
             tool_state=tool_state,
             plan_mode=plan,
+            dry_run=dry_run,
             enable_web_tools=user_cfg.web_tools_enabled,
             sandbox_image=user_cfg.sandbox_image or settings.sandbox_image,
             user_images=mention.images or None,
@@ -1463,6 +1484,13 @@ def chat(
         bool,
         typer.Option("--plan", help="Start in read-only Plan Mode (write tools disabled)."),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Validate diffs and AST/Ruff preflight without writing files to disk.",
+        ),
+    ] = False,
     continue_last: Annotated[
         bool,
         typer.Option("--continue", "-c", help="Resume the most recent saved session."),
@@ -1481,6 +1509,7 @@ def chat(
         test_timeout=test_timeout,
         yes=yes,
         plan=plan,
+        dry_run=dry_run,
         continue_last=continue_last,
         resume=resume,
         prompt_for_model=(model is None),
@@ -1496,6 +1525,7 @@ def _start_interactive_session(
     test_timeout: int | None,
     yes: bool,
     plan: bool,
+    dry_run: bool = False,
     continue_last: bool,
     resume: str | None,
     prompt_for_model: bool,
@@ -1579,12 +1609,12 @@ def _start_interactive_session(
         )
         console.print(
             f"[dim]Mode: {mode} | Max calls: {call_limit} | Test timeout: {effective_timeout}s | "
-            f"Auto-edit: {auto_approve}[/dim]"
+            f"Auto-edit: {auto_approve} | Dry-run: {dry_run}[/dim]"
         )
         console.print(
-            "[dim]Commands: /goal, /ui, /plan, /doctor, /cost, /cmd, /settings, /providers, "
-            "/local, /key, /mcp, /web, /search, /grep, /compact, /undo, /checkpoints, /save, "
-            "/resume, /sessions, /memory, /init, /tools, /test, /model, /limit, /auto, "
+            "[dim]Commands: /goal, /ui, /plan, /commit, /doctor, /cost, /cmd, /settings, "
+            "/providers, /local, /key, /mcp, /web, /search, /grep, /compact, /undo, /checkpoints, "
+            "/save, /resume, /sessions, /memory, /init, /tools, /test, /model, /limit, /auto, "
             "/clear, /files, /exit[/dim]\n"
         )
 
@@ -1852,6 +1882,32 @@ def _start_interactive_session(
                     )
                     dtbl.add_row(c.name, f"[{col}]{c.status}[/{col}]", c.detail)
                 console.print(dtbl)
+                continue
+            if user_input == "/commit":
+                with console.status(f"[cyan]Drafting commit message ({chosen_model})...[/cyan]"):
+                    ok_draft, msg_text = draft_commit_message(
+                        workspace=guard,
+                        client=client,
+                        model=chosen_model,
+                    )
+                if not ok_draft:
+                    console.print(f"[yellow]{msg_text}[/yellow]")
+                    continue
+                console.print(
+                    Panel(
+                        msg_text,
+                        title="[bold cyan]Proposed Commit Message[/bold cyan]",
+                        border_style="cyan",
+                    )
+                )
+                if Confirm.ask("Commit staged changes with this message?", default=False):
+                    c_ok, c_out = run_git_commit(guard, msg_text)
+                    if c_ok:
+                        console.print(f"[green]✓ Committed:[/green] {c_out}")
+                    else:
+                        console.print(f"[red]✗ Commit failed:[/red] {c_out}")
+                else:
+                    console.print("[dim]Commit cancelled (nothing committed).[/dim]")
                 continue
             if user_input == "/cost":
                 ctbl = Table(title="Session Token & Cost Telemetry", border_style="cyan")
@@ -2362,6 +2418,7 @@ def _start_interactive_session(
                         conversation_history=history,
                         tracer=tracer,
                         plan_mode=plan_mode,
+                        dry_run=dry_run,
                         enable_web_tools=web_tools_enabled,
                         sandbox_image=sandbox_image,
                         user_images=mention_exp.images or None,

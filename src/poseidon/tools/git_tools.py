@@ -111,3 +111,50 @@ def register_git_tools(registry: ToolRegistry, workspace: WorkspaceGuard) -> Non
             handler=handle_git_diff,
         )
     )
+
+
+def draft_commit_message(
+    workspace: WorkspaceGuard,
+    client: object,
+    model: str,
+) -> tuple[bool, str]:
+    """Read `git diff --staged` and draft a concise Conventional Commit message via LLM."""
+    ok, diff_out = _run_git(
+        workspace,
+        ["diff", "--cached", "--", ".", ":(exclude).env*", ":(exclude)*.pem", ":(exclude)*.key"],
+    )
+    if not ok:
+        return False, f"Could not inspect staged diff: {diff_out}"
+    staged = diff_out.strip()
+    if not staged:
+        return False, "No staged changes found. Stage files with `git add` first."
+    if len(staged) > MAX_DIFF_CHARS:
+        staged = staged[:MAX_DIFF_CHARS] + "\n... [truncated]"
+
+    resp = client.chat_completion(  # type: ignore[attr-defined]
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Write ONE concise Conventional Commit subject line (<= 72 chars, e.g. "
+                    "`feat(cli): add dry-run diff preview`) describing the staged diff. "
+                    "Return ONLY the commit message line, no quotes or markdown."
+                ),
+            },
+            {"role": "user", "content": staged},
+        ],
+        temperature=0.1,
+    )
+    msg = resp.content.strip().splitlines()[0].strip("`\"' ")
+    if not msg:
+        return False, "Model returned an empty commit message."
+    return True, msg
+
+
+def run_git_commit(workspace: WorkspaceGuard, message: str) -> tuple[bool, str]:
+    """Commit staged changes using `git commit -m <message>` with shell=False."""
+    cleaned = message.strip()
+    if not cleaned:
+        return False, "Commit message cannot be empty."
+    return _run_git(workspace, ["commit", "-m", cleaned])
