@@ -60,3 +60,47 @@ def redact_secrets(text: str) -> tuple[str, int]:
             redacted = pattern.sub(_repl_token, redacted)
 
     return redacted, total_hits
+
+
+_DANGEROUS_CMD_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "destructive file deletion (rm/rmdir/unlink/shred)",
+        re.compile(r"(?i)(?:^|[;&|`$(\s])(?:rm|rmdir|unlink|shred)\b"),
+    ),
+    (
+        "disk/filesystem wipe (mkfs/dd)",
+        re.compile(r"(?i)(?:^|[;&|`$(\s])(?:mkfs(?:\.[a-z0-9]+)?|dd\s+if=)\b"),
+    ),
+    ("fork bomb pattern", re.compile(r":\s*\(\s*\)\s*\{")),
+    (
+        "privilege/permission escalation (chmod/chown/sudo/su)",
+        re.compile(r"(?i)(?:^|[;&|`$(\s])(?:sudo|su|chmod|chown)\b"),
+    ),
+    (
+        "system power control (shutdown/reboot/halt)",
+        re.compile(r"(?i)(?:^|[;&|`$(\s])(?:shutdown|reboot|halt|poweroff)\b"),
+    ),
+    (
+        "network exfiltration/piping (curl/wget/nc)",
+        re.compile(r"(?i)(?:^|[;&|`$(\s])(?:curl|wget|nc|netcat)\b"),
+    ),
+    (
+        "encoded shell execution (base64 | sh)",
+        re.compile(r"(?i)base64\s+.*\|\s*(?:sh|bash|python)"),
+    ),
+)
+
+
+def validate_sandbox_command(command: str) -> str | None:
+    """Validate a sandbox shell command; return a rejection reason string or None if allowed."""
+    cleaned = command.strip()
+    if not cleaned:
+        return "Command must be non-empty."
+    if "\x00" in cleaned:
+        return "Null bytes are not allowed in commands."
+    if len(cleaned) > 500:
+        return "Command exceeds maximum safe length (500 chars)."
+    for reason, pattern in _DANGEROUS_CMD_PATTERNS:
+        if pattern.search(cleaned):
+            return f"Blocked by input validator: {reason}."
+    return None

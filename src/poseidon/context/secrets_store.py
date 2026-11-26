@@ -38,11 +38,68 @@ def _mask_key(raw: str) -> str:
     return f"{cleaned[:6]}…{cleaned[-4:]}"
 
 
-class ProviderSecretsStore:
-    """Read/write user-level provider API keys without exposing plaintext secrets."""
+KEYRING_SERVICE_NAME = "poseidon-cli"
 
-    def __init__(self, path: Path | None = None) -> None:
+
+class ProviderSecretsStore:
+    """Read/write user-level provider API keys via OS Keyring with 0600 JSON fallback."""
+
+    def __init__(
+        self,
+        path: Path | None = None,
+        *,
+        use_keyring: bool | None = None,
+        keyring_backend: Any | None = None,
+    ) -> None:
+        self._explicit_path = path is not None or bool(
+            os.environ.get("POSEIDON_SECRETS_FILE", "").strip()
+        )
         self._path = path or default_secrets_path()
+        # Use OS Keyring by default when no explicit file override is set
+        self._use_keyring = (not self._explicit_path) if use_keyring is None else use_keyring
+        self._keyring = keyring_backend
+
+    def _get_keyring(self) -> Any | None:
+        if not self._use_keyring:
+            return None
+        if self._keyring is not None:
+            return self._keyring
+        try:
+            import keyring
+
+            return keyring
+        except Exception:
+            return None
+
+    def _keyring_get(self, provider: str) -> str:
+        kr = self._get_keyring()
+        if kr is None:
+            return ""
+        try:
+            val = kr.get_password(KEYRING_SERVICE_NAME, provider)
+            return str(val).strip() if val else ""
+        except Exception:
+            return ""
+
+    def _keyring_set(self, provider: str, api_key: str) -> bool:
+        kr = self._get_keyring()
+        if kr is None:
+            return False
+        try:
+            kr.set_password(KEYRING_SERVICE_NAME, provider, api_key)
+            return True
+        except Exception:
+            return False
+
+    def _keyring_delete(self, provider: str) -> bool:
+        kr = self._get_keyring()
+        if kr is None:
+            return False
+        try:
+            kr.delete_password(KEYRING_SERVICE_NAME, provider)
+            return True
+        except Exception:
+            return False
 
     @property
     def path(self) -> Path:
@@ -74,7 +131,7 @@ class ProviderSecretsStore:
         tmp.replace(self._path)
 
     def set_key(self, provider: str, api_key: str) -> None:
-        """Store an API key for one supported cloud provider."""
+        """Store an API key in OS Keyring (preferred) or 0600 JSON fallback."""
         prov = provider.lower().strip()
         if prov not in SUPPORTED_KEY_PROVIDERS:
             valid = ", ".join(SUPPORTED_KEY_PROVIDERS)
@@ -82,26 +139,32 @@ class ProviderSecretsStore:
         cleaned = api_key.strip()
         if not cleaned:
             raise ValueError("API key cannot be empty (use clear_key to remove).")
+        if self._keyring_set(prov, cleaned):
+            return
         data = self._read_map()
         data[prov] = cleaned
         self._write_map(data)
 
     def clear_key(self, provider: str) -> bool:
-        """Remove a saved API key for one provider."""
+        """Remove a saved API key from OS Keyring and/or fallback JSON file."""
         prov = provider.lower().strip()
         if prov not in SUPPORTED_KEY_PROVIDERS:
             valid = ", ".join(SUPPORTED_KEY_PROVIDERS)
             raise ValueError(f"Unknown provider '{provider}'. Supported: {valid}.")
+        removed = self._keyring_delete(prov)
         data = self._read_map()
-        if prov not in data:
-            return False
-        del data[prov]
-        self._write_map(data)
-        return True
+        if prov in data:
+            del data[prov]
+            self._write_map(data)
+            removed = True
+        return removed
 
     def resolve_key(self, provider: str, settings: Settings | None = None) -> str:
-        """Resolve effective API key: saved user key first, then Settings / env var."""
+        """Resolve effective API key: OS Keyring -> saved file -> Settings / env var."""
         prov = provider.lower().strip()
+        kr_val = self._keyring_get(prov)
+        if kr_val:
+            return kr_val
         saved = self._read_map().get(prov, "").strip()
         if saved:
             return saved
@@ -123,7 +186,16 @@ class ProviderSecretsStore:
         saved_map = self._read_map()
         status: dict[str, dict[str, Any]] = {}
         for prov, (label, env_var) in SUPPORTED_KEY_PROVIDERS.items():
-            if prov in saved_map:
+            kr_val = self._keyring_get(prov)
+            if kr_val:
+                status[prov] = {
+                    "label": label,
+                    "env_var": env_var,
+                    "configured": True,
+                    "source": "keyring",
+                    "hint": _mask_key(kr_val),
+                }
+            elif prov in saved_map:
                 status[prov] = {
                     "label": label,
                     "env_var": env_var,

@@ -17,6 +17,7 @@ from poseidon.patching.unified_diff import (
     sha256_text,
 )
 from poseidon.plugins.hooks import HookManager
+from poseidon.privacy import validate_sandbox_command
 from poseidon.sandbox.docker_runner import TestRunner, TestRunResult
 from poseidon.search.lexical import search_workspace_text
 from poseidon.tools.registry import (
@@ -680,12 +681,13 @@ def register_core_tools(
     if test_runner is not None and hasattr(test_runner, "run_command"):
         def handle_run_sandbox_cmd(args: dict[str, Any]) -> ToolExecutionResult:
             cmd = str(args["command"]).strip()
-            if not cmd:
+            block_reason = validate_sandbox_command(cmd)
+            if block_reason is not None:
                 return ToolExecutionResult(
                     tool_name="run_sandbox_cmd",
                     ok=False,
-                    output="Error: command must be non-empty.",
-                    summary="empty command",
+                    output=f"Error: {block_reason}",
+                    summary="blocked unsafe command",
                 )
             if confirm_patch is not None:
                 preview = f"SANDBOX CMD (--network none, disposable copy):\n$ {cmd}"
