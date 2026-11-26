@@ -1106,7 +1106,7 @@
       <div class="toolbar">
         <button id="toolsBtn" class="btn" title="Inspect active Built-in, Plugin, and MCP tools (/tools)">Tools</button>
         <button id="testBtn" class="btn btn-primary" title="Run isolated Docker pytest suite (/test)">Run Tests</button>
-        <button id="shutdownBtn" class="btn btn-reject" title="Save session, stop Web UI, and close Docker container (/exit)">&#x23FB; Stop</button>
+        <button id="shutdownBtn" class="btn btn-reject" title="Save and stop this Poseidon session (/exit)">&#x23FB; Stop</button>
       </div>
     </header>
     <div class="meander-bar" aria-hidden="true"></div>
@@ -1909,12 +1909,21 @@
         const pill = info.reachable
           ? `<span class="pill-pass">ONLINE (${info.models.length})</span>`
           : `<span class="pill-tag">OFFLINE</span>`;
+        const activeModelId = (state && state.model) || "";
+        const addedModelIds = new Set(((state && state.models) || []).map((m) => m.id));
         const modelsHtml = info.models.length
-          ? info.models.map((mid) => `
+          ? info.models.map((mid) => {
+              const isActive = mid === activeModelId;
+              const isAdded = addedModelIds.has(mid);
+              const actionHtml = isActive
+                ? `<span class="pill-pass">✓ Active</span>`
+                : `<button class="btn btn-sm ${isAdded ? "btn-ghost" : "btn-primary"}" data-add-prov-model="${esc(mid)}">${isAdded ? "Use" : "+ Add &amp; Use"}</button>`;
+              return `
               <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(56,232,255,0.08);">
                 <span class="mono truncate" style="font-size:11.8px;color:var(--cyan-soft);">${esc(mid)}</span>
-                <button class="btn btn-sm btn-primary" data-add-prov-model="${esc(mid)}">+ Add &amp; Use</button>
-              </div>`).join("")
+                ${actionHtml}
+              </div>`;
+            }).join("")
           : `<div style="font-size:11.5px;color:var(--text-dim);margin-top:4px;">Start ${label} on your host machine to auto-detect models.</div>`;
         return `
           <div style="padding:8px 9px;border:1px solid rgba(56,232,255,0.16);border-radius:8px;margin-top:8px;background:rgba(4,13,22,0.82);">
@@ -1926,22 +1935,26 @@
           </div>`;
       };
 
-      const keyRows = Object.entries(keys).map(([prov, info]) => `
+      const keyRows = Object.entries(keys).map(([prov, info]) => {
+        const srcTag = info.keyring_target ? `keyring (${info.keyring_target})` : info.source;
+        return `
         <div style="padding:8px 0;border-bottom:1px solid rgba(56,232,255,0.08);">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;gap:6px;">
             <span style="font-size:12.2px;font-weight:600;color:var(--text-main);">${esc(info.label)}</span>
-            <span class="${info.configured ? "pill-pass" : "pill-tag"}">${info.configured ? `${esc(info.source)}: ${esc(info.hint)}` : "not set"}</span>
+            <span class="${info.configured ? "pill-pass" : "pill-tag"}">${info.configured ? `${esc(srcTag)}: ${esc(info.hint)}` : "not set"}</span>
           </div>
-          <div style="display:flex;gap:6px;">
-            <input type="password" class="form-input" id="keyInput_${prov}" placeholder="Paste ${esc(info.env_var)}..." autocomplete="off" />
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <input type="password" class="form-input" style="flex:1;min-width:140px;" id="keyInput_${prov}" placeholder="Paste ${esc(info.env_var)}..." autocomplete="off" />
             <button class="btn btn-sm btn-primary" data-save-key="${prov}">Save</button>
-            ${info.source === "saved" ? `<button class="btn btn-sm btn-reject" data-clear-key="${prov}">Clear</button>` : ""}
+            <button class="btn btn-sm btn-ghost" data-use-key="${prov}" title="Pin a specific OS Keyring target, 'env', or 'auto'">Source</button>
+            ${(info.source === "saved" || info.source === "keyring") ? `<button class="btn btn-sm btn-reject" data-clear-key="${prov}">Clear</button>` : ""}
           </div>
-        </div>`).join("");
+        </div>`;
+      }).join("");
 
       container.innerHTML = `
         <div class="settings-card">
-          <div class="form-label" style="margin-bottom:6px;">Local AI — Ollama &amp; LM Studio (Zero API Key)</div>
+          <div class="form-label" style="margin-bottom:6px;">Local AI — Ollama, LM Studio &amp; Generic OpenAI-Compatible (Zero API Key)</div>
           <div class="form-group">
             <label class="form-label">Ollama OpenAI Endpoint</label>
             <input id="ollamaUrlInput" type="text" class="form-input" value="${esc(data.ollama_base_url || "")}" />
@@ -1950,17 +1963,22 @@
             <label class="form-label">LM Studio OpenAI Endpoint</label>
             <input id="lmstudioUrlInput" type="text" class="form-input" value="${esc(data.lmstudio_base_url || "")}" />
           </div>
+          <div class="form-group">
+            <label class="form-label">Generic Local AI Endpoint (llama.cpp / vLLM / Jan — optional)</label>
+            <input id="localAiUrlInput" type="text" class="form-input" placeholder="http://localhost:8080/v1" value="${esc(data.local_ai_base_url || "")}" />
+          </div>
           <div style="display:flex;justify-content:flex-end;">
             <button id="saveLocalUrlsBtn" class="btn btn-primary btn-sm">Save &amp; Detect Local Models</button>
           </div>
           ${renderLocalBlock("ollama", "Ollama")}
           ${renderLocalBlock("lmstudio", "LM Studio")}
+          ${data.local_ai_base_url ? renderLocalBlock("local", "Generic Local AI") : ""}
         </div>
 
         <div class="settings-card">
           <div class="form-label" style="margin-bottom:4px;">Direct Cloud API Keys (Claude, Gemini, GPT, OpenRouter)</div>
           <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">
-            Stored securely outside your project folder (0600 Docker volume) — never written to Git or logs.
+            Stored in OS Keyring (Windows Credential Manager / macOS Keychain) or .env — never written to Git or logs.
           </div>
           ${keyRows}
         </div>
@@ -1980,12 +1998,27 @@
           body: JSON.stringify({
             ollama_base_url: document.getElementById("ollamaUrlInput").value.trim(),
             lmstudio_base_url: document.getElementById("lmstudioUrlInput").value.trim(),
+            local_ai_base_url: document.getElementById("localAiUrlInput").value.trim(),
           }),
         });
         const d = await r.json();
         if (r.ok) applyState(d.state);
         renderSettingsDrawer();
       };
+
+      container.querySelectorAll("[data-use-key]").forEach((btn) => {
+        btn.onclick = async () => {
+          const prov = btn.dataset.useKey;
+          const target = prompt(`Choose key source for ${prov} (enter OS credential name like 'key:${prov}', 'env' to force .env, or 'auto'):`, "auto");
+          if (target === null) return;
+          const r = await fetch("/api/providers/key", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider: prov, action: "use", target: target.trim() || "auto" }),
+          });
+          if (r.ok) renderSettingsDrawer();
+        };
+      });
 
       container.querySelectorAll("[data-save-key]").forEach((btn) => {
         btn.onclick = async () => {
@@ -2022,7 +2055,10 @@
             body: JSON.stringify({ model_id: mid, activate: true }),
           });
           const d = await r.json();
-          if (r.ok) applyState(d.state);
+          if (r.ok) {
+            applyState(d.state);
+            renderSettingsDrawer();
+          }
         };
       });
     }
@@ -2562,12 +2598,12 @@
     function markShuttingDown() {
       shuttingDown = true;
       els.statusPill.classList.add("offline");
-      els.statusText.textContent = "Container Stopped";
+      els.statusText.textContent = "Session Stopped";
       els.sendBtn.disabled = true;
       els.testBtn.disabled = true;
       els.shutdownBtn.disabled = true;
       els.promptInput.disabled = true;
-      els.promptInput.placeholder = "Poseidon container stopped. You can safely close this tab.";
+      els.promptInput.placeholder = "Session stopped. You can safely close this tab.";
     }
 
     async function shutdownContainer() {
@@ -2575,8 +2611,8 @@
       markShuttingDown();
       appendCard(
         "cmd-card",
-        "Poseidon Stopped",
-        `<div class="md"><p>Session saved and Docker container shut down cleanly. You can close this browser tab.</p></div>`,
+        "Session Stopped",
+        `<div class="md"><p>Session stopped.</p></div>`,
         `<span class="pill-fail">STOPPED</span>`
       );
       try { await fetch("/api/shutdown", { method: "POST" }); } catch (_e) {}

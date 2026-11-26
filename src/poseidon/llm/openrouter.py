@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -184,6 +185,16 @@ def parse_provider_model(model_id: str) -> tuple[str, str]:
     return "openrouter", cleaned
 
 
+def normalize_local_url(url: str) -> str:
+    """Translate legacy `host.docker.internal` URLs to `localhost` when running natively."""
+    cleaned = url.strip().rstrip("/")
+    if not cleaned:
+        return ""
+    if not Path("/.dockerenv").exists() and "host.docker.internal" in cleaned:
+        return cleaned.replace("host.docker.internal", "localhost")
+    return cleaned
+
+
 def discover_local_models(
     *,
     ollama_base_url: str = "http://localhost:11434/v1",
@@ -194,11 +205,12 @@ def discover_local_models(
     """Probe Ollama, LM Studio, and optional generic OpenAI-compatible `LOCAL_AI_BASE_URL`."""
     out: dict[str, dict[str, Any]] = {}
     targets: list[tuple[str, str]] = [
-        ("ollama", ollama_base_url.rstrip("/")),
-        ("lmstudio", lmstudio_base_url.rstrip("/")),
+        ("ollama", normalize_local_url(ollama_base_url)),
+        ("lmstudio", normalize_local_url(lmstudio_base_url)),
     ]
-    if local_ai_base_url.strip():
-        targets.append(("local", local_ai_base_url.strip().rstrip("/")))
+    norm_local = normalize_local_url(local_ai_base_url)
+    if norm_local:
+        targets.append(("local", norm_local))
     for provider, base_url in targets:
         models: list[str] = []
         reachable = False
@@ -256,8 +268,10 @@ class OpenRouterClient:
         )
         self._owns_client = http_client is None
         self._models_catalog: dict[str, dict[str, Any]] | None = None
-        self._ollama_base_url = (ollama_base_url or settings.ollama_base_url).rstrip("/")
-        self._lmstudio_base_url = (lmstudio_base_url or settings.lmstudio_base_url).rstrip("/")
+        self._ollama_base_url = normalize_local_url(ollama_base_url or settings.ollama_base_url)
+        self._lmstudio_base_url = normalize_local_url(
+            lmstudio_base_url or settings.lmstudio_base_url
+        )
         self._secrets = secrets_store or ProviderSecretsStore()
 
     def fetch_models_catalog(self) -> dict[str, dict[str, Any]]:

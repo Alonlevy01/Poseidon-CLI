@@ -54,6 +54,7 @@ from poseidon.llm.openrouter import (
     OpenRouterClient,
     OpenRouterError,
     discover_local_models,
+    normalize_local_url,
 )
 from poseidon.mcp.client import MCPClientManager
 from poseidon.observability.respan import PoseidonTracer
@@ -159,8 +160,9 @@ class WebSessionContext:
     web_tools_enabled: bool = True
     goal_max_iterations: int = 5
     auto_close_seconds: int = 8
-    ollama_base_url: str = "http://host.docker.internal:11434/v1"
-    lmstudio_base_url: str = "http://host.docker.internal:1234/v1"
+    ollama_base_url: str = "http://localhost:11434/v1"
+    lmstudio_base_url: str = "http://localhost:1234/v1"
+    local_ai_base_url: str = ""
     mode: str = "agent"
     plan_mode: bool = False
     auto_approve: bool = False
@@ -1335,8 +1337,11 @@ def create_web_app(
         web_tools_enabled=saved_user_cfg.web_tools_enabled,
         goal_max_iterations=saved_user_cfg.goal_max_iterations,
         auto_close_seconds=saved_user_cfg.auto_close_seconds,
-        ollama_base_url=saved_user_cfg.ollama_base_url or cfg.ollama_base_url,
-        lmstudio_base_url=saved_user_cfg.lmstudio_base_url or cfg.lmstudio_base_url,
+        ollama_base_url=normalize_local_url(saved_user_cfg.ollama_base_url or cfg.ollama_base_url),
+        lmstudio_base_url=normalize_local_url(
+            saved_user_cfg.lmstudio_base_url or cfg.lmstudio_base_url
+        ),
+        local_ai_base_url=normalize_local_url(cfg.local_ai_base_url),
         plan_mode=plan_mode,
         auto_approve=auto_approve,
     )
@@ -1574,12 +1579,14 @@ def create_web_app(
                 "local": discover_local_models(
                     ollama_base_url=ctx.ollama_base_url,
                     lmstudio_base_url=ctx.lmstudio_base_url,
+                    local_ai_base_url=ctx.local_ai_base_url,
                 ),
                 "presets": [
                     {"id": mid, "notes": desc} for mid, desc in DIRECT_PROVIDER_PRESETS
                 ],
                 "ollama_base_url": ctx.ollama_base_url,
                 "lmstudio_base_url": ctx.lmstudio_base_url,
+                "local_ai_base_url": ctx.local_ai_base_url,
             }
 
         return JSONResponse(await asyncio.to_thread(_inspect))
@@ -1591,6 +1598,9 @@ def create_web_app(
         try:
             if action == "clear":
                 ctx.secrets_store.clear_key(provider)
+            elif action == "use":
+                target = str(body.get("target") or "auto").strip()
+                ctx.secrets_store.set_preferred_source(provider, target)
             else:
                 api_key = str(body.get("api_key") or "").strip()
                 ctx.secrets_store.set_key(provider, api_key)
@@ -1608,15 +1618,19 @@ def create_web_app(
         body = await request.json()
         ollama_url = str(body.get("ollama_base_url") or "").strip()
         lm_url = str(body.get("lmstudio_base_url") or "").strip()
+        local_url = str(body.get("local_ai_base_url") or "").strip()
         if ollama_url:
-            ctx.ollama_base_url = ollama_url.rstrip("/")
+            ctx.ollama_base_url = normalize_local_url(ollama_url)
         if lm_url:
-            ctx.lmstudio_base_url = lm_url.rstrip("/")
+            ctx.lmstudio_base_url = normalize_local_url(lm_url)
+        ctx.local_ai_base_url = normalize_local_url(local_url)
+        ctx.settings.local_ai_base_url = ctx.local_ai_base_url
         ctx.persist_user_settings()
         local = await asyncio.to_thread(
             discover_local_models,
             ollama_base_url=ctx.ollama_base_url,
             lmstudio_base_url=ctx.lmstudio_base_url,
+            local_ai_base_url=ctx.local_ai_base_url,
         )
         return JSONResponse({"ok": True, "local": local, "state": ctx.snapshot_state()})
 
