@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>A containerized, multi-provider Python coding agent harness</strong> with an interactive Terminal CLI (<code>poseidon</code>), an Abyssal-Ocean Web Workbench (<code>http://localhost:2701</code>), native tool calling, atomic unified diffs, AST + Ruff preflight validation, local ONNX semantic code search, isolated <code>--network none</code> Docker test verification, autonomous <code>/goal</code> execution, plugins, MCP, Local AI (Ollama / LM Studio), and multimodal screenshot/vision support.
+  <strong>A native, multi-provider Python coding agent harness</strong> with an interactive Terminal CLI (<code>poseidon</code>), an Abyssal-Ocean Web Workbench (<code>http://localhost:2701</code>), SSE token streaming, parallel read-only tools, Tree-sitter multi-language symbol outlines, outbound secret redaction, atomic unified diffs, AST + Ruff preflight validation, local ONNX semantic code search, isolated <code>--network none</code> Docker test/command sandboxing, autonomous <code>/goal</code> execution, plugins, MCP, Local AI (Ollama / LM Studio), and multimodal vision support.
 </p>
 
 <p align="center">
@@ -55,15 +55,18 @@ flowchart LR
 
 ## Key Capabilities
 
-- **Instant Launch Everywhere:** Global `poseidon` and `poseidon ui -d` shims (`scripts/install.ps1`) mount your current directory cleanly into Docker with zero local Python pollution.
+- **Instant Native Launch Everywhere:** Runs natively via Python (`uv run poseidon` or global `poseidon` / `poseidon ui -d` shims via `scripts/install.ps1`) with zero Docker required to launch the CLI or Web UI.
 - **Terminal CLI & Abyssal-Ocean Web UI (100% Parity):**
-  - Live WebSocket streaming on **`http://localhost:2701`** (multi-port `--port 2702`, detached `-d` with browser auto-open, reload-safe 8s auto-shutdown on tab close, or 1-click `⏻ Stop`).
+  - Real-time SSE token streaming in CLI and live WebSocket streaming on **`http://localhost:2701`** (multi-port `--port 2702`, detached `-d` with browser auto-open, reload-safe 8s auto-shutdown on tab close, or 1-click `⏻ Stop`).
   - Launch Web UI straight from inside an active terminal session via `/ui` (seamlessly resuming your current conversation).
   - **`Ctrl+K`** fuzzy command & file palette, **`@file`** & **`@image.png`** mentions with fuzzy `@` picker, **Split / Unified Diff** approval cards, **Prompt History (`↑`/`↓`)**, **Clipboard Screenshot Paste (`Ctrl+V`)** for vision models, and a **Centered 5-Tab Settings Modal**.
 - **6 AI Providers (Cloud + Local AI):**
   - **OpenRouter** (default free model `nvidia/nemotron-3.5-super-vl:free` + live catalog browser in Settings)
-  - **Local AI (Zero API Key):** **Ollama** (`ollama:<model>`) and **LM Studio** (`lmstudio:<model>`) with live host auto-discovery (`host.docker.internal`)
-  - **Direct Cloud BYOK:** **Anthropic Claude** (`anthropic:<model>`), **Google Gemini** (`gemini:<model>`), **OpenAI GPT** (`openai:<model>`) — keys stored outside your project folder in a `0600` Docker volume (`poseidon_secrets`), never committed to Git or logged.
+  - **Local AI (Zero API Key):** **Ollama** (`ollama:<model>`) and **LM Studio** (`lmstudio:<model>`) with live `localhost` auto-discovery
+  - **Direct Cloud BYOK:** **Anthropic Claude** (`anthropic:<model>`), **Google Gemini** (`gemini:<model>`), **OpenAI GPT** (`openai:<model>`) — keys stored outside your project folder (`~/.poseidon_secrets/keys.json`, `0600`), never committed to Git or logged.
+- **Fast Multi-Language Navigation & Execution:**
+  - **Parallel Read-Only Tools** execute concurrent file/search/symbol calls in one turn while keeping edits & tests sequential and atomic.
+  - **Tree-sitter `get_symbols`** extracts compact class/function/method line outlines across Python, JS/TS, Go, Rust, Java, and C/C++.
 - **Autonomous `/goal` Engine:** Read-only planning pass → bounded execute-and-verify iterations → strict test-verification completion gate + anti-stuck breaker + live cancellation.
 - **Reliability & Context Engineering:**
   - Atomic unified diffs with SHA-256 stale-file checks, read-before-edit enforcement, and surrounding-line mismatch recovery.
@@ -103,11 +106,10 @@ git diff | uv run poseidon -p "Review this diff for bugs" --plan
 uv run poseidon -p "Summarize @analytics.py" --workspace demo_workspace --model ollama:qwen3:8b --plan --json
 ```
 
-### Optional: Containerized Harness & Global Windows `poseidon` Shim
-If you prefer running the harness itself inside Docker without local Python:
+### Global Windows `poseidon` Command (Native)
+Install the global native shim so `poseidon` and `poseidon ui -d` work from **any** folder without Docker:
 ```powershell
-docker compose build poseidon
-.\scripts\install.ps1   # Installs global `poseidon` & `poseidon ui -d` commands on Windows
+.\scripts\install.ps1   # Installs native `poseidon` & `poseidon ui -d` commands on Windows
 ```
 
 ---
@@ -135,21 +137,22 @@ docker compose build poseidon
 ## Security & Isolation
 
 - **Workspace Containment (`WorkspaceGuard`):** Blocks absolute paths, `..` traversal, and secret patterns (`.env*`, `*.pem`, `*.key`, `*credentials*`, `id_rsa*`) across every tool, file viewer endpoint, and `@file` mention.
-- **Disposable Test Sandbox:** Untrusted project code runs in `poseidon-sandbox:dev` with `--network none`, `cap_drop=["ALL"]`, `no-new-privileges:true`, non-root user, 512 MB RAM / 1 CPU / 64 PIDs limits, hard timeout, and **zero secrets injected**.
-- **Out-of-Workspace Credentials:** User-entered API keys live in `/home/poseidon/.poseidon_secrets/keys.json` (`0600`, dedicated Docker volume) and are never returned in plaintext.
+- **Outbound Secret Redaction (`privacy.py`):** Automatically scrubs accidental hardcoded API keys, tokens, PEM private keys, and password assignments from tool outputs before they leave your machine.
+- **Disposable Test & Command Sandbox:** Untrusted project code (`run_tests`, `run_sandbox_cmd`) runs inside a disposable `poseidon-sandbox:dev` container on a tar-copied snapshot with `--network none`, `cap_drop=["ALL"]`, `no-new-privileges:true`, non-root user, 512 MB RAM / 1 CPU / 64 PIDs limits, hard timeout, and **zero secrets injected**.
+- **Out-of-Workspace Credentials:** User-entered API keys live in `~/.poseidon_secrets/keys.json` (`0600`) and are never returned in plaintext.
 - **SSRF Protection:** `fetch_url` resolves hostnames and blocks loopback, private RFC1918, link-local, and metadata IPs before and after redirects.
 
 ---
 
 ## Development & Verification
 
-```powershell
-# Lint with ruff inside Docker
-docker compose run --rm --entrypoint ruff poseidon check /app/src /app/tests
+```bash
+# Lint with ruff
+uv run ruff check src tests
 
-# Run the full test suite inside Docker
-docker compose run --rm --entrypoint pytest poseidon /app/tests
+# Run the full test suite natively
+uv run pytest -q
 
 # Refresh deterministic uv.lock
-docker run --rm -v "${PWD}:/work" -w /work --entrypoint uv poseidon-cli:dev lock
+uv lock
 ```

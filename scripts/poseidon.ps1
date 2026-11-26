@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-    Launch Poseidon-CLI or Poseidon Web UI inside Docker mounted on your current directory.
+    Launch Poseidon-CLI or Poseidon Web UI natively (zero Docker required for CLI/Web UI).
+    Docker is used only when running isolated `--network none` unit tests (`run_tests` / `poseidon test`).
 
 .EXAMPLES
     poseidon                          # Launch interactive CLI in current folder
@@ -8,18 +9,50 @@
     poseidon ui                       # Launch Web UI in foreground on http://localhost:2701
     poseidon ui -d                    # Launch Web UI detached (terminal stays free!)
     poseidon ui -d --port 2702        # Launch a second detached Web UI on port 2702
-    poseidon ui status                # Show all running Poseidon Web UI instances
-    poseidon ui stop                  # Stop Web UI on default port 2701
-    poseidon ui stop --port 2702      # Stop Web UI on port 2702
-    poseidon ui stop --all            # Stop all running Poseidon Web UI instances
+    poseidon ui stop                  # Stop detached native Poseidon Web UI processes
+    poseidon doctor                   # Check environment & provider health
 #>
-# Note: intentionally uses automatic `$args` (no `[Parameter()]` block) so PowerShell
-# does not hijack short flags like `-d` (`-Debug`), `-v`, or `-w` as common parameters.
 [string[]]$PoseidonArgs = @($args)
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+$VenvExe = Join-Path $RepoRoot ".venv\Scripts\poseidon.exe"
 $EnvFile = Join-Path $RepoRoot ".env"
 $WorkDir = (Get-Location).Path
+
+# Ensure native virtualenv exists
+if (-not (Test-Path $VenvExe)) {
+    Write-Host "Poseidon native virtualenv not found at $VenvExe. Running 'uv sync --extra dev'..." -ForegroundColor Cyan
+    Push-Location $RepoRoot
+    try {
+        uv sync --extra dev
+    }
+    finally {
+        Pop-Location
+    }
+    if (-not (Test-Path $VenvExe)) {
+        Write-Host "Error: Could not find or build $VenvExe. Run 'uv sync --extra dev' inside $RepoRoot." -ForegroundColor Red
+        exit 1
+    }
+}
+
+# Load API keys from repo .env into process env (without overwriting already-set env vars)
+if (Test-Path $EnvFile) {
+    Get-Content $EnvFile | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
+            $idx = $line.IndexOf("=")
+            $k = $line.Substring(0, $idx).Trim()
+            $v = $line.Substring($idx + 1).Trim().Trim('"').Trim("'")
+            if ($k -and -not [Environment]::GetEnvironmentVariable($k, "Process")) {
+                # Auto-fix legacy Docker host.docker.internal URLs when running natively
+                if (($k -eq "OLLAMA_BASE_URL" -or $k -eq "LMSTUDIO_BASE_URL") -and $v -like "*host.docker.internal*") {
+                    $v = $v -replace "host\.docker\.internal", "localhost"
+                }
+                [Environment]::SetEnvironmentVariable($k, $v, "Process")
+            }
+        }
+    }
+}
 
 function Get-PoseidonUiPort {
     param([string[]]$ArgList)
@@ -38,78 +71,34 @@ function Get-PoseidonUiPort {
     return $port
 }
 
-# Handle `poseidon ui ...` lifecycle commands (detach, multi-port, status, stop)
+# Handle `poseidon ui ...` lifecycle commands natively
 if ($PoseidonArgs -and $PoseidonArgs.Count -gt 0 -and $PoseidonArgs[0] -eq "ui") {
     $SubArgs = @()
     if ($PoseidonArgs.Count -gt 1) {
         $SubArgs = $PoseidonArgs[1..($PoseidonArgs.Count - 1)]
     }
 
-    # 1. `poseidon ui status`
-    if ($SubArgs.Count -gt 0 -and $SubArgs[0] -eq "status") {
-        $rows = docker ps --filter "label=poseidon.ui=true" --format "{{.Names}}`t{{.Ports}}`t{{.Status}}"
-        $composeRow = docker ps --filter "name=poseidon-cli-poseidon-ui" --format "{{.Names}}`t{{.Ports}}`t{{.Status}}"
-        $allRows = @($rows) + @($composeRow) | Where-Object { $_ -and $_.Trim() -ne "" } | Select-Object -Unique
-        if (-not $allRows -or $allRows.Count -eq 0) {
-            Write-Host "No Poseidon Web UI containers are currently running." -ForegroundColor DarkGray
+    if ($SubArgs.Count -gt 0 -and $SubArgs[0] -eq "stop") {
+        $procs = Get-CimInstance Win32_Process -Filter "Name='poseidon.exe' OR Name='python.exe'" |
+            Where-Object { $_.CommandLine -like "*poseidon*ui*" }
+        if (-not $procs) {
+            Write-Host "No running native Poseidon Web UI processes found." -ForegroundColor DarkGray
             exit 0
         }
-        Write-Host "Running Poseidon Web UI instance(s):" -ForegroundColor Cyan
-        foreach ($r in $allRows) {
-            $parts = $r -split "`t"
-            $urlHint = ""
-            if ($parts[1] -match ':(\d+)->') {
-                $urlHint = " -> http://localhost:$($Matches[1])"
-            }
-            Write-Host "  - $($parts[0])  ($($parts[2]))$urlHint" -ForegroundColor Green
+        foreach ($p in $procs) {
+            Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+            Write-Host "Stopped Poseidon Web UI (PID $($p.ProcessId))." -ForegroundColor Green
         }
         exit 0
     }
 
-    # 2. `poseidon ui stop [--port N | --all]`
-    if ($SubArgs.Count -gt 0 -and $SubArgs[0] -eq "stop") {
-        $stopAll = ($SubArgs -contains "--all") -or ($SubArgs -contains "-a")
-        if ($stopAll) {
-            $ids = @(docker ps -q --filter "label=poseidon.ui=true") + @(docker ps -q --filter "name=poseidon-cli-poseidon-ui")
-            $ids = $ids | Where-Object { $_ -and $_.Trim() -ne "" } | Select-Object -Unique
-            if (-not $ids -or $ids.Count -eq 0) {
-                Write-Host "No running Poseidon Web UI containers found." -ForegroundColor DarkGray
-                exit 0
-            }
-            docker stop @ids | Out-Null
-            Write-Host "Stopped $($ids.Count) Poseidon Web UI container(s)." -ForegroundColor Green
-            exit 0
-        }
-
-        $targetPort = Get-PoseidonUiPort -ArgList $SubArgs
-        $containerName = "poseidon-ui-$targetPort"
-        $found = docker ps -q --filter "name=^/${containerName}$"
-        if ($found) {
-            docker stop $containerName | Out-Null
-            Write-Host "Stopped $containerName (port $targetPort)." -ForegroundColor Green
-            exit 0
-        }
-        if ($targetPort -eq 2701) {
-            $composeFound = docker ps -q --filter "name=^/poseidon-cli-poseidon-ui-1$"
-            if ($composeFound) {
-                docker stop poseidon-cli-poseidon-ui-1 | Out-Null
-                Write-Host "Stopped poseidon-cli-poseidon-ui-1 (port 2701)." -ForegroundColor Green
-                exit 0
-            }
-        }
-        Write-Host "No running Poseidon Web UI found on port $targetPort." -ForegroundColor Yellow
-        exit 1
-    }
-
-    # 3. `poseidon ui [-d|--detach] [--port N] [--keep-alive] [--no-open] ...`
     $Detach = $false
     $NoOpen = $false
+    $HasWorkspace = $false
     $ForwardArgs = @("ui")
     $Port = Get-PoseidonUiPort -ArgList $SubArgs
-    $HasPortFlag = $false
 
-    for ($i = 0; $i -lt $SubArgs.Count; $i++) {
-        $arg = $SubArgs[$i]
+    foreach ($arg in $SubArgs) {
         if ($arg -eq "-d" -or $arg -eq "--detach") {
             $Detach = $true
             continue
@@ -118,93 +107,33 @@ if ($PoseidonArgs -and $PoseidonArgs.Count -gt 0 -and $PoseidonArgs[0] -eq "ui")
             $NoOpen = $true
             continue
         }
-        if ($arg -eq "--port" -or $arg -eq "-p" -or $arg -like "--port=*") {
-            $HasPortFlag = $true
+        if ($arg -eq "--workspace" -or $arg -eq "-w" -or $arg -like "--workspace=*") {
+            $HasWorkspace = $true
         }
         $ForwardArgs += $arg
     }
-    if (-not $HasPortFlag) {
-        $ForwardArgs += @("--port", "$Port")
+
+    if (-not $HasWorkspace -and -not ($SubArgs -contains "--help") -and -not ($SubArgs -contains "-h")) {
+        $ForwardArgs += @("--workspace", $WorkDir)
     }
 
-    $ContainerName = "poseidon-ui-$Port"
-    $DockerArgs = @("run", "--rm")
     if ($Detach) {
-        $DockerArgs += "-d"
-    } else {
-        $DockerArgs += "-it"
-    }
-    $DockerArgs += @(
-        "--name", $ContainerName,
-        "--label", "poseidon.ui=true",
-        "--label", "poseidon.port=$Port",
-        "--label", "poseidon.workspace=$WorkDir",
-        "--group-add", "0",
-        "--add-host", "host.docker.internal:host-gateway",
-        "-e", "POSEIDON_HOST_WORKSPACE=$WorkDir",
-        "-p", "${Port}:${Port}",
-        "-v", "${WorkDir}:/workspace",
-        "-v", "/var/run/docker.sock:/var/run/docker.sock",
-        "-v", "poseidon-cli_poseidon_model_cache:/home/poseidon/.cache/fastembed",
-        "-v", "poseidon-cli_poseidon_secrets:/home/poseidon/.poseidon_secrets",
-        "-w", "/workspace"
-    )
-    if (Test-Path $EnvFile) {
-        $DockerArgs += @("--env-file", $EnvFile)
-    }
-    $DockerArgs += "poseidon-cli:dev"
-    $DockerArgs += $ForwardArgs
-
-    if ($Detach) {
-        $cid = & docker @DockerArgs
-        if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-        }
-        $Url = "http://localhost:$Port"
-        # Wait briefly until Uvicorn is listening before opening the browser
-        for ($try = 0; $try -lt 24; $try++) {
-            try {
-                $resp = Invoke-WebRequest -Uri "$Url/api/state" -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
-                if ($resp.StatusCode -eq 200) { break }
-            } catch {
-                Start-Sleep -Milliseconds 250
-            }
-        }
-        Write-Host "Poseidon Web UI started ($ContainerName)" -ForegroundColor Cyan
-        Write-Host "  URL:       $Url" -ForegroundColor Green
-        Write-Host "  Workspace: $WorkDir" -ForegroundColor DarkGray
-        Write-Host "  Shutdown:  close the browser tab (auto-stops in 8s), click Stop, or run 'poseidon ui stop --port $Port'" -ForegroundColor DarkGray
+        Start-Process -FilePath $VenvExe -ArgumentList $ForwardArgs -WindowStyle Hidden | Out-Null
+        $url = "http://localhost:$Port"
+        Write-Host "Poseidon Web UI started natively in background: $url" -ForegroundColor Green
+        Write-Host "  Workspace: $WorkDir" -ForegroundColor Cyan
+        Write-Host "  Stop with: poseidon ui stop" -ForegroundColor DarkGray
         if (-not $NoOpen) {
-            Start-Process $Url
+            Start-Sleep -Milliseconds 900
+            Start-Process $url
         }
         exit 0
     }
 
-    & docker @DockerArgs
+    & $VenvExe @ForwardArgs
     exit $LASTEXITCODE
 }
 
-# Standard CLI invocation (`poseidon`, `poseidon -p "..."`, `git diff | poseidon -p "..."`)
-$TtyFlags = if ([Console]::IsInputRedirected) { @("-i") } else { @("-it") }
-$DockerArgs = @("run", "--rm") + $TtyFlags + @(
-    "--group-add", "0",
-    "--add-host", "host.docker.internal:host-gateway",
-    "-e", "POSEIDON_HOST_WORKSPACE=$WorkDir",
-    "-v", "${WorkDir}:/workspace",
-    "-v", "/var/run/docker.sock:/var/run/docker.sock",
-    "-v", "poseidon-cli_poseidon_model_cache:/home/poseidon/.cache/fastembed",
-    "-v", "poseidon-cli_poseidon_secrets:/home/poseidon/.poseidon_secrets",
-    "-w", "/workspace"
-)
-
-if (Test-Path $EnvFile) {
-    $DockerArgs += @("--env-file", $EnvFile)
-}
-
-$DockerArgs += "poseidon-cli:dev"
-if ($PoseidonArgs) {
-    $DockerArgs += $PoseidonArgs
-}
-
-& docker @DockerArgs
+# Standard native CLI execution (pass current folder as --workspace if not specified on chat/root)
+& $VenvExe @PoseidonArgs
 exit $LASTEXITCODE
