@@ -71,15 +71,50 @@ class ProviderSecretsStore:
         except Exception:
             return None
 
-    def _keyring_get(self, provider: str) -> str:
+    def _keyring_lookup(self, provider: str) -> tuple[str, str]:
+        """Return `(secret_value, matched_target_label)` checking dedicated Poseidon keys first."""
         kr = self._get_keyring()
         if kr is None:
-            return ""
-        try:
-            val = kr.get_password(KEYRING_SERVICE_NAME, provider)
-            return str(val).strip() if val else ""
-        except Exception:
-            return ""
+            return "", ""
+        service = os.environ.get("POSEIDON_KEYRING_SERVICE", "").strip() or KEYRING_SERVICE_NAME
+        _, env_var = SUPPORTED_KEY_PROVIDERS.get(provider, ("", ""))
+
+        # 1. Dedicated Poseidon credentials first (e.g. poseidon-cli/openrouter)
+        for user_key in (provider, env_var):
+            if not user_key:
+                continue
+            try:
+                val = kr.get_password(service, user_key)
+                if val and str(val).strip():
+                    return str(val).strip(), f"{service}/{user_key}"
+            except Exception:
+                continue
+
+        get_cred = getattr(kr, "get_credential", None)
+        if callable(get_cred):
+            # Dedicated target names first, then general provider credential names
+            targets = (
+                f"poseidon:{provider}",
+                f"poseidon-cli:{provider}",
+                f"key:{provider}",
+                provider,
+                env_var,
+            )
+            for target_name in targets:
+                if not target_name:
+                    continue
+                try:
+                    cred = get_cred(target_name, None)
+                    pw = getattr(cred, "password", None) if cred is not None else None
+                    if pw and str(pw).strip():
+                        return str(pw).strip(), target_name
+                except Exception:
+                    continue
+        return "", ""
+
+    def _keyring_get(self, provider: str) -> str:
+        val, _ = self._keyring_lookup(provider)
+        return val
 
     def _keyring_set(self, provider: str, api_key: str) -> bool:
         kr = self._get_keyring()
@@ -186,13 +221,14 @@ class ProviderSecretsStore:
         saved_map = self._read_map()
         status: dict[str, dict[str, Any]] = {}
         for prov, (label, env_var) in SUPPORTED_KEY_PROVIDERS.items():
-            kr_val = self._keyring_get(prov)
+            kr_val, kr_target = self._keyring_lookup(prov)
             if kr_val:
                 status[prov] = {
                     "label": label,
                     "env_var": env_var,
                     "configured": True,
                     "source": "keyring",
+                    "keyring_target": kr_target,
                     "hint": _mask_key(kr_val),
                 }
             elif prov in saved_map:

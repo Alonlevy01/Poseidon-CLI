@@ -1942,8 +1942,13 @@ def _start_interactive_session(
                 ptbl.add_column("Status", style="white")
                 ptbl.add_column("Key / Endpoint", style="dim")
                 for info in kstat.values():
+                    src_lbl = (
+                        f"keyring: {info['keyring_target']}"
+                        if info.get("keyring_target")
+                        else str(info["source"])
+                    )
                     st = (
-                        f"[green]configured ({info['source']})[/green]"
+                        f"[green]configured ({src_lbl})[/green]"
                         if info["configured"]
                         else "[dim]not set[/dim]"
                     )

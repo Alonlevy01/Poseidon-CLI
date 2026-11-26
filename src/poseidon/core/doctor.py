@@ -120,7 +120,11 @@ def run_doctor_checks(
     # 3. Cloud API Keys (masked, never plaintext)
     key_status = secrets.masked_status(cfg)
     configured_cloud = [
-        f"{v['label']} ({v['source']})" for v in key_status.values() if v["configured"]
+        f"{v['label']} (keyring: {v['keyring_target']})"
+        if v.get("keyring_target")
+        else f"{v['label']} ({v['source']})"
+        for v in key_status.values()
+        if v["configured"]
     ]
     checks.append(
         DoctorCheck(
